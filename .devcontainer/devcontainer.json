@@ -1,0 +1,11 @@
+{
+  "name": "Devbox Remote Container",
+  "build": {
+    "dockerfile": "./Dockerfile",
+    "context": ".."
+  },
+  "containerUser": "devbox",
+  "updateRemoteUserUID": true,
+  "remoteUser": "devbox",
+  "runArgs": []
+}

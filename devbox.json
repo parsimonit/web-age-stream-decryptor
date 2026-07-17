@@ -1,0 +1,11 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/refs/heads/main/schemas/devbox.schema.json",
+  "packages": ["nodejs@22", "python311", "git"],
+  "shell": {
+    "scripts": {
+      "install-deps": [
+        "$VENV_DIR/bin/python -m pip install 'git+https://github.com/github/spec-kit.git'"
+      ]
+    }
+  }
+}

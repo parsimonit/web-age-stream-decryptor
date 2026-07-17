@@ -1,0 +1,52 @@
+# Node
+node_modules/
+dist/
+build/
+.vite/
+
+# TypeScript
+*.tsbuildinfo
+
+# Spec Kit
+.github/agents/
+.github/prompts/
+.specify/
+specs/
+
+# Working docs (not part of the tracked, self-contained doc set)
+docs/
+
+# Python (Spec Kit install artifacts)
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# Devbox
+.devbox/
+
+# Editor
+.vscode/settings.json
+.vscode/
+.idea/
+.specstory/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.local
+.env*
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+
+# Runtime artifacts
+coverage/
+
+# Catchall
+nogit/

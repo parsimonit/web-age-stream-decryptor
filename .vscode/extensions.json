@@ -1,0 +1,8 @@
+{
+  "recommendations": [
+    "jetify.devbox",
+    "github.copilot-chat",
+    "dbaeumer.vscode-eslint",
+    "esbenp.prettier-vscode"
+  ]
+}

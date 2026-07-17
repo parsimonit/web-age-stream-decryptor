@@ -1,0 +1,39 @@
+{
+  "name": "web-age-stream-decryptor",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Client-side Age passphrase decryption in the browser",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/parsimonit/web-age-stream-decryptor.git"
+  },
+  "homepage": "https://github.com/parsimonit/web-age-stream-decryptor#readme",
+  "bugs": {
+    "url": "https://github.com/parsimonit/web-age-stream-decryptor/issues"
+  },
+  "engines": {
+    "node": ">=20",
+    "npm": ">=10"
+  },
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "lint": "eslint src test"
+  },
+  "dependencies": {
+    "age-encryption": "0.3.0"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0",
+    "prettier": "^3.0.0",
+    "typescript": "^5.6.0",
+    "vite": "^8.0.0",
+    "vitest": "^4.1.10"
+  }
+}

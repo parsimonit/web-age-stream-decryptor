@@ -1,0 +1,24 @@
+# Build outputs
+dist/
+node_modules/
+.vite/
+
+# Spec Kit — generated/agent-managed files should not be reformatted
+.specify/
+.specstory/
+specs/
+docs/
+.github/agents/
+.github/copilot-instructions.md
+
+# Lock files
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
+# Cache
+.cache/
+*.log
+
+# Environment
+.env*
