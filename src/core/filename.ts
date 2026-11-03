@@ -113,8 +113,17 @@ function sanitize(raw: string): string {
 function truncate(name: string, max: number): string {
   const dot = name.lastIndexOf(".");
   const extension = dot > 0 ? name.slice(dot) : "";
-  if (extension.length >= max) return name.slice(0, max);
-  return name.slice(0, max - extension.length) + extension;
+  if (extension.length >= max) return name.slice(0, safeCut(name, max));
+  return name.slice(0, safeCut(name, max - extension.length)) + extension;
+}
+
+/** Moves the cut one unit left rather than splitting a surrogate pair (emoji). */
+function safeCut(name: string, index: number): number {
+  const previous = name.charCodeAt(index - 1);
+  const next = name.charCodeAt(index);
+  const splitsPair =
+    previous >= 0xd800 && previous <= 0xdbff && next >= 0xdc00 && next <= 0xdfff;
+  return splitsPair ? index - 1 : index;
 }
 
 function isRisky(name: string): boolean {

@@ -44,6 +44,7 @@ Live app: https://decrypt-app.zebrastream.io/
 - Decrypted HTML/SVG runs in a sandboxed iframe. Scripts stay disabled unless the user opts in; even then the frame has no same-origin access to the app, its storage, or its DOM.
 - Plain `http://` file URLs (non-loopback) are flagged as insecure before fetching. HTTPS pages cannot fetch plain HTTP; the browser blocks it as mixed content.
 - Payloads up to the 10 MiB cap are held in memory. Larger files are never rendered: they are streamed to disk through the File System Access API where available, otherwise through a service worker that relays the decrypted stream into the browser's download manager. Non-download requests are never intercepted, the worker never caches or fetches anything itself, and it only answers one-shot, unguessable ids registered by the page moments earlier. A failed or cancelled download can leave a partial file that the page cannot delete.
+- The service worker only handles `__download__/<one-shot id>` requests within its scope, only sees navigation requests there, and never logs or forwards URLs.
 - No server-side decryption. No backend persistence.
 
 Important:

@@ -15,12 +15,14 @@
  *                    { type: "cancel" }      the browser dropped the download
  *   page -> worker   { type: "chunk", data: ArrayBuffer }      transferred
  *                    { type: "done" } | { type: "error" } | { type: "abort" }
- *                    { type: "ping" }        keep-alive (Safari kills idle SWs)
+ *                    { type: "ping" }        keep-alive, sent with
+ *                    worker.postMessage: a port message does not reset the
+ *                    worker's idle timer, so it cannot keep it alive.
  *
  * Security properties:
- * - Only ids registered by this page seconds earlier are answered, and each id
- *   is consumed on first use. Nothing is persisted, so a restarted worker loses
- *   its entries and unguessable/stale ids get a plain 404.
+ * - Only ids registered by this page within the last minute are answered, and
+ *   each id is consumed on first use. Nothing is persisted, so a restarted
+ *   worker loses its entries and unguessable/expired ids get a plain 404.
  * - The worker never caches and never issues its own network requests: any
  *   request that is not a registered download is left alone (no respondWith).
  * - Sandboxed viewer documents have an opaque origin, so they cannot reach this
@@ -29,8 +31,10 @@
 
 const DOWNLOAD_DIR = "__download__/";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Registrations never consumed by a navigation are dropped after a minute. */
+const ID_TTL_MS = 60_000;
 
-/** id -> { port, filename, size } for downloads registered by the page. */
+/** id -> { port, filename, size, at } for downloads registered by the page. */
 const pending = new Map();
 
 self.addEventListener("install", () => {
@@ -44,13 +48,22 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("message", (event) => {
   const message = event.data;
+  // Only "register" is handled. Everything else, notably the keep-alive "ping",
+  // returns here cheaply: it is sent with worker.postMessage because only that
+  // resets the worker's idle timer.
   if (!message || message.type !== "register") return;
   const port = event.ports && event.ports[0];
   if (!port || typeof message.id !== "string" || !UUID.test(message.id)) return;
+
+  const now = Date.now();
+  for (const [id, entry] of pending) {
+    if (now - entry.at >= ID_TTL_MS) pending.delete(id);
+  }
   pending.set(message.id, {
     port,
     filename: typeof message.filename === "string" ? message.filename : "download",
     size: typeof message.size === "number" ? message.size : undefined,
+    at: now,
   });
   port.postMessage({ type: "registered" });
 });
@@ -66,18 +79,33 @@ self.addEventListener("fetch", (event) => {
 
   // One-shot: the entry is gone even if the response fails midway.
   const id = url.pathname.slice(prefix.length);
+  const now = Date.now();
   const entry = pending.get(id);
   pending.delete(id);
-  if (!entry) {
+  if (!entry || now - entry.at >= ID_TTL_MS) {
     event.respondWith(notFound());
     return;
   }
-  event.respondWith(downloadResponse(entry));
+  // Build the response inside respondWith's try/catch: a header failure (for
+  // example a filename encodeURIComponent rejects) must not let the navigation
+  // fall through to the network.
+  try {
+    event.respondWith(downloadResponse(entry));
+  } catch {
+    event.respondWith(serverError());
+  }
 });
 
 function notFound() {
   return new Response("Unknown download id", {
     status: 404,
+    headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" },
+  });
+}
+
+function serverError() {
+  return new Response("Download could not be prepared", {
+    status: 500,
     headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" },
   });
 }
@@ -164,8 +192,11 @@ function downloadResponse({ port, filename, size }) {
  * clients still get a usable file; the RFC 5987 form keeps the real name.
  */
 function contentDisposition(filename) {
-  const fallback = filename.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
-  const encoded = encodeURIComponent(filename).replace(
+  // encodeURIComponent throws on a lone surrogate; normalize first.
+  const wellFormed =
+    typeof filename.toWellFormed === "function" ? filename.toWellFormed() : filename;
+  const fallback = wellFormed.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+  const encoded = encodeURIComponent(wellFormed).replace(
     /['()*]/g,
     (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`
   );

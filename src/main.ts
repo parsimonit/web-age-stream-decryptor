@@ -18,7 +18,11 @@ import { clearError, showErrorMessage } from "./ui/error.ts";
 import { bindForm, prefillForm } from "./ui/form.ts";
 import { formatBytes } from "./ui/format.ts";
 import { render, type UiHandlers } from "./ui/render.ts";
-import { parseSaverOverride, pickSaver } from "./ui/savers/index.ts";
+import {
+  parseSaverOverride,
+  pickSaver,
+  SaverUnavailableError,
+} from "./ui/savers/index.ts";
 
 const maxBufferBytes = resolveMaxBufferBytes(import.meta.env.VITE_MAX_BUFFER_BYTES);
 
@@ -173,6 +177,13 @@ function backToStart(): void {
   setState({ phase: "idle", warning: lastWarning });
 }
 
+function showCannotStream(): void {
+  clearError();
+  showErrorMessage(
+    `This file is larger than ${formatBytes(maxBufferBytes)} and this browser cannot stream it to disk. Use a Chromium-based browser to save large files.`
+  );
+}
+
 function save(): void {
   if (state.phase !== "review") return;
 
@@ -182,10 +193,7 @@ function save(): void {
 
   const saver = pickSaver(review, saverOverride);
   if (!saver) {
-    clearError();
-    showErrorMessage(
-      `This file is larger than ${formatBytes(maxBufferBytes)} and this browser cannot stream it to disk. Use a Chromium-based browser to save large files.`
-    );
+    showCannotStream();
     return;
   }
 
@@ -216,6 +224,13 @@ function save(): void {
     .catch((error: unknown) => {
       if (state.phase !== "saving") return;
       saveController = null;
+      if (error instanceof SaverUnavailableError) {
+        // Registration failed before the source was consumed, so keep the
+        // review usable and leave `loaded` alone (like the no-saver path).
+        setState({ phase: "review", review });
+        showCannotStream();
+        return;
+      }
       if (isAbortError(error)) {
         // A complete payload can be saved again; an oversize one had its
         // remaining stream consumed, so start over from the form.

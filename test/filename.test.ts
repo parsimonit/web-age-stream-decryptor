@@ -141,6 +141,17 @@ describe("filenameFor — sanitization", () => {
     expect(result.name).toBe(long.slice(0, 200));
   });
 
+  it("never splits a surrogate pair at the truncation boundary", () => {
+    // The emoji straddles index 200, where the name would otherwise be cut.
+    const name = `${"a".repeat(199)}😀`;
+    const result = filenameFor(
+      "https://example.com/x.age",
+      `attachment; filename="${name}"`
+    );
+    expect(result.name).toBe("a".repeat(199));
+    expect(result.name).not.toMatch(/[\uD800-\uDFFF]/);
+  });
+
   it("falls back to 'download' when nothing usable remains", () => {
     expect(
       filenameFor("https://example.com/x.age", 'attachment; filename="..."')

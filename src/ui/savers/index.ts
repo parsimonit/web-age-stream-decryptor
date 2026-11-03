@@ -4,6 +4,7 @@ import { fsaSaver, isFsaSupported } from "./fsa.ts";
 import { isSwSupported, swSaver } from "./sw.ts";
 import type { Saver, SaverId } from "./types.ts";
 
+export { SaverUnavailableError } from "./sw.ts";
 export type { Saver, SaverId } from "./types.ts";
 
 /** Browser capabilities the choice depends on, injectable for unit tests. */
