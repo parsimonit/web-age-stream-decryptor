@@ -2,10 +2,10 @@
 
 Client-side Age passphrase decryption in the browser.
 
-This app fetches an encrypted Age payload over HTTPS, decrypts it in-browser, and then either:
+This app fetches an encrypted Age payload over HTTPS, decrypts it in-browser, and shows a review of what was decrypted before the user either:
 
-- navigates to rendered content for HTML and PDF
-- downloads decrypted bytes for other content types, or when force-download is enabled
+- views HTML, SVG, or PDF content in an isolated frame
+- saves the decrypted bytes to disk
 
 Live app: https://decrypt-app.zebrastream.io/
 
@@ -19,24 +19,33 @@ Live app: https://decrypt-app.zebrastream.io/
 ## Core behavior
 
 - Manual form decrypt flow (URL + passphrase)
-- Fragment flow: `#u=<encoded-url>&pw=<encoded-passphrase>[&d=1]`
+- Fragment prefill: `#u=<encoded-url>&pw=<encoded-passphrase>[&d=1]`
+- Fragment never auto-starts decryption; the user still reviews and confirms
 - Partial fragment prefill when only one required field is present
-- Force download option from UI or fragment (`d=1`)
-- Copy Link action to generate a shareable fragment URL
-- Content detection for HTML, PDF, binary
-- User-friendly error handling for network, CORS, HTTP, format, and decrypt failures
+- Review gate before any view or save: host, file name, detected type, size, and warnings
+- HTML/SVG review opens a sandboxed iframe with scripts disabled; "Run scripts" is an explicit opt-in and the frame never gets `allow-same-origin`
+- PDF review opens the browser's PDF viewer in an iframe
+- Save-only mode from the checkbox or fragment (`d=1`), which hides View
+- Content detection for HTML, SVG, PDF, and binary
+- 10 MiB in-memory cap: larger payloads are reviewable as save-only and streamed to disk with the File System Access API in Chromium browsers
+- User-friendly error handling for network, CORS, HTTP, format, decrypt, and interrupted downloads
 
 ## Security model
 
-- Passphrase and encrypted file URL can be supplied via URL fragment, which is not sent in HTTP requests.
-- App removes fragment values from the address bar after auto-decrypt startup.
+- Passphrase and encrypted file URL can be supplied via the URL fragment, which browsers do not send in HTTP requests.
+- The app strips the fragment from the address bar immediately after reading it, and never logs or persists it.
+- The fragment is a prefill convenience only. Decryption always requires an explicit user action.
+- A review step shows what will be viewed or saved before any content is rendered or written.
+- Decrypted HTML/SVG runs in a sandboxed iframe. Scripts stay disabled unless the user opts in; even then the frame has no same-origin access to the app, its storage, or its DOM.
+- Plain `http://` file URLs (non-loopback) are flagged as insecure before fetching. HTTPS pages cannot fetch plain HTTP; the browser blocks it as mixed content.
+- Payloads up to the 10 MiB cap are held in memory. Larger files are never rendered and are only streamed to disk on Chromium browsers with the File System Access API; other browsers do not support files over the cap.
 - No server-side decryption. No backend persistence.
 
 Important:
 
 - Anyone with access to the full fragment URL can decrypt the target payload.
 - Treat fragment links as secrets.
-- Decrypted HTML content is navigated to directly (`location.replace` on a Blob URL) and will execute any script it contains. Only decrypt HTML payloads from sources you trust.
+- Decrypted content is still untrusted. Viewing it is opt-in, and enabling scripts means running code from the encrypted file.
 
 ## Tech stack
 
@@ -77,32 +86,40 @@ Preview production build:
 
 1. npm run preview
 
+Run the browser E2E release gate:
+
+1. `npm run e2e` builds the app, starts a fixture server and `vite preview`, drives headless Chrome via agent-browser, and prints a pass/fail table
+2. `npm run verify` runs `npm run gate && npm run e2e`
+3. The first E2E run needs Chrome for agent-browser: run `npx agent-browser install` if it is missing
+4. E2E is local for now and is CI-equivalent via `npm run e2e`; see the roadmap for an optional CI job
+
 ## Project layout
 
 - [src/core](src/core): Pure processing logic (decrypt, detection, fragment parsing, shared types)
 - [src/ui](src/ui): DOM adapters and rendering behavior
 - [src/main.ts](src/main.ts): App orchestration
 - [test](test): Unit tests for core logic
+- [scripts/e2e](scripts/e2e): Browser E2E orchestrator, fixture server, scenarios, and the agent-browser driver
 
 Rule: `src/core` must not depend on DOM APIs. `src/ui` may depend on `src/core`, but not the other way around.
 
 ## Release readiness checklist
 
 - CI green for lint, tests, and build
+- `npm run e2e` passes locally (or in the optional CI E2E job)
 - License and legal files present
 - README current with behavior and limitations
-- Manual test pass for fragment + force-download + copy-link flows
+- Manual test pass for fragment prefill, review gate, save-only, and HTML scripts opt-in
 - Deployment target and URL validated
 
 ## Roadmap / known gaps
 
 Not yet implemented:
 
-- Harden HTML content detection (BOM/whitespace/doctype edge cases)
-- Use `Content-Disposition` metadata to improve download filenames
-- Loading spinner in the status area during decryption
-- App logo in the UI
-- Streaming download to disk for very large files (currently buffered in memory)
+- Auto-start after confirmation: remember consent per content kind in localStorage (never keyed by URL/passphrase, never persisting the fragment; cookies are the wrong tool since they are sent to the host; consent must be revocable/optional)
+- Cross-browser streamed save for Firefox/Safari via a service-worker saver
+- Cross-browser e2e (Playwright: Chromium/Firefox/WebKit); may replace agent-browser only once it covers every scenario; only `scripts/e2e/driver.mjs` should need replacing
+- Optional CI job for e2e (`npm run e2e`; Chrome via `npx agent-browser install`; devbox env also works)
 
 ## Contributing
 

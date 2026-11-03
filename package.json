@@ -30,7 +30,9 @@
     "audit:prod": "npm audit --omit=dev --audit-level=high",
     "check:node": "node scripts/check-node-version.mjs",
     "gate": "npm run check:node && npm run lint && npm run typecheck && npm run format:check && npm run test:cov && npm run test:interop && npm run build && npm run audit:prod",
-    "test:interop": "vitest run test/interop.test.ts"
+    "test:interop": "vitest run test/interop.test.ts",
+    "e2e": "node scripts/e2e/run.mjs",
+    "verify": "npm run gate && npm run e2e"
   },
   "dependencies": {
     "age-encryption": "0.3.0"
@@ -40,6 +42,7 @@
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
     "@vitest/coverage-v8": "^4.1.12",
+    "agent-browser": "0.41.1",
     "eslint": "^10.7.0",
     "prettier": "^3.0.0",
     "typescript": "^5.9.0",

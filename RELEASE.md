@@ -40,8 +40,9 @@ Breaking changes:
 
 1. Ensure main is green in CI.
 2. Run local checks:
-   - `npm run gate` (or `devbox run -- npm run gate` inside devbox)
-   - runs `check:node`, `lint`, `typecheck`, `format:check`, `test:cov`, `build`, `audit:prod`
+   - `npm run verify` runs `npm run gate && npm run e2e` (or `devbox run -- npm run verify` inside devbox)
+   - `npm run gate` runs `check:node`, `lint`, `typecheck`, `format:check`, `test:cov`, `build`, `audit:prod`
+   - `npm run e2e` is the browser release gate; it is local for now (CI-equivalent via `npm run e2e`) and its first run needs `npx agent-browser install` if Chrome is missing
 3. Pick next version based on commits since last tag.
 4. Update package.json version.
 5. Add a short changelog section to the GitHub Release notes.
