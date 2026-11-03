@@ -21,6 +21,7 @@ Live app: https://decrypt-app.zebrastream.io/
 - Manual form decrypt flow (URL + passphrase)
 - Fragment prefill: `#u=<encoded-url>&pw=<encoded-passphrase>[&d=1]`
 - Fragment never auto-starts decryption; the user still reviews and confirms
+- Copy Link action (generates a shareable fragment link; the link contains the passphrase — treat as a secret)
 - Partial fragment prefill when only one required field is present
 - Review gate before any view or save: host, file name, detected type, size, and warnings
 - HTML/SVG review opens a sandboxed iframe with scripts disabled; "Run scripts" is an explicit opt-in and the frame never gets `allow-same-origin`
@@ -40,6 +41,7 @@ Live app: https://decrypt-app.zebrastream.io/
 - Passphrase and encrypted file URL can be supplied via the URL fragment, which browsers do not send in HTTP requests.
 - The app strips the fragment from the address bar immediately after reading it, and never logs or persists it.
 - The fragment is a prefill convenience only. Decryption always requires an explicit user action.
+- Copy Link places the passphrase in the clipboard on explicit user action only; the generated link is never stored, logged, or put in the address bar.
 - A review step shows what will be viewed or saved before any content is rendered or written.
 - Decrypted HTML/SVG runs in a sandboxed iframe. Scripts stay disabled unless the user opts in; even then the frame has no same-origin access to the app, its storage, or its DOM.
 - Plain `http://` file URLs (non-loopback) are flagged as insecure before fetching. HTTPS pages cannot fetch plain HTTP; the browser blocks it as mixed content.
@@ -118,7 +120,7 @@ Rule: `src/core` must not depend on DOM APIs. `src/ui` may depend on `src/core`,
 - `npm run e2e` passes locally (or in the optional CI E2E job)
 - License and legal files present
 - README current with behavior and limitations
-- Manual test pass for fragment prefill, review gate, save-only, and HTML scripts opt-in
+- Manual test pass for fragment prefill, copy-link flows, review gate, save-only, and HTML scripts opt-in
 - Deployment target and URL validated
 
 ## Roadmap / known gaps

@@ -1,5 +1,51 @@
 import { describe, expect, it } from "vitest";
-import { parseFragment } from "../src/core/fragment.ts";
+import { buildFragment, parseFragment } from "../src/core/fragment.ts";
+
+describe("buildFragment", () => {
+  const fileUrl = "https://example.com/path/file.age?a=1&b=2";
+
+  const passphrases = [
+    "secret",
+    " leading and trailing ",
+    "a&b=c#d%e+f",
+    "pässword with spaces",
+    "emoji 🔐 and 日本語",
+    "c2VjcmV0MTIz==",
+    "100%+done#yes",
+  ];
+
+  it("round-trips passphrases through parseFragment without altering them", () => {
+    for (const passphrase of passphrases) {
+      for (const saveOnly of [false, true]) {
+        const hash = buildFragment({ fileUrl, passphrase, saveOnly });
+        expect(hash.startsWith("#")).toBe(false);
+        expect(parseFragment(hash)).toEqual({ fileUrl, passphrase, saveOnly });
+      }
+    }
+  });
+
+  it("sets d=1 only for saveOnly", () => {
+    expect(
+      buildFragment({ fileUrl, passphrase: "secret", saveOnly: false })
+    ).not.toContain("d=1");
+    expect(buildFragment({ fileUrl, passphrase: "secret", saveOnly: true })).toContain(
+      "d=1"
+    );
+  });
+
+  it("uses exactly u, pw and optionally d keys", () => {
+    const off = new URLSearchParams(
+      buildFragment({ fileUrl, passphrase: "secret", saveOnly: false })
+    );
+    expect([...off.keys()]).toEqual(["u", "pw"]);
+
+    const on = new URLSearchParams(
+      buildFragment({ fileUrl, passphrase: "secret", saveOnly: true })
+    );
+    expect([...on.keys()]).toEqual(["u", "pw", "d"]);
+    expect(on.get("d")).toBe("1");
+  });
+});
 
 describe("parseFragment", () => {
   it("parses both params and leaves saveOnly off by default", () => {

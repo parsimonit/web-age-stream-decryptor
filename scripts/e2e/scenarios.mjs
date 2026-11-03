@@ -124,6 +124,29 @@ async function installSaverStub(driver) {
   })()`);
 }
 
+/** Replaces the Clipboard API; `reject` makes writeText fail like a denied permission. */
+async function installClipboardStub(driver, { reject = false } = {}) {
+  const body = reject
+    ? 'throw new DOMException("denied", "NotAllowedError");'
+    : "window.__copied = text;";
+  await driver.eval(`(() => {
+    window.__copied = undefined;
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async (text) => {
+          ${body}
+        },
+      },
+    });
+    return true;
+  })()`);
+}
+
+function linkParams(link) {
+  return new URLSearchParams(new URL(link).hash.slice(1));
+}
+
 async function opfsFileInfo(driver, name) {
   return driver.eval(`(async () => {
     try {
@@ -741,6 +764,140 @@ export const scenarios = [
       );
       assert(await driver.exists("save-button"), "review stays usable");
       assertEqual(requestCount(server.stats(), path), 1, "one request, no retry");
+    },
+  },
+  {
+    name: "t) Copy Link builds a shareable fragment, and that link decrypts the with-spaces fixture",
+    async run({ driver, server, app }) {
+      const path = "/ok/with-spaces.age";
+      const target = server.url(path);
+
+      await driver.open(app);
+      await installClipboardStub(driver);
+      await driver.fill("file-url", target);
+      await driver.fill("passphrase", SPACES_PASSPHRASE);
+      await driver.click("save-only");
+      assertEqual(
+        await driver.value("passphrase"),
+        SPACES_PASSPHRASE,
+        "filled passphrase"
+      );
+      assertEqual(
+        await driver.eval("document.querySelector('[data-testid=save-only]').checked"),
+        true,
+        "save-only checked"
+      );
+
+      await driver.click("copy-link-button");
+      await driver.waitFor("typeof window.__copied === 'string'", 10_000);
+      const link = await driver.eval("window.__copied");
+
+      assert(
+        link.startsWith(`${app}#`),
+        `link should start with ${app}#, got ${JSON.stringify(link)}`
+      );
+      const params = linkParams(link);
+      assertEqual(params.get("u"), target, "link URL");
+      assertEqual(params.get("pw"), SPACES_PASSPHRASE, "link passphrase");
+      assertEqual(params.get("d"), "1", "link d=1");
+      assertEqual(params.get("saver"), null, "link must not carry the saver override");
+      assertEqual([...params.keys()].join(","), "u,pw,d", "link keys");
+
+      // A fresh navigation through the copied link prefills, strips, and waits.
+      await driver.open(link);
+      await waitForForm(driver);
+      assertEqual(await driver.value("file-url"), target, "prefilled URL");
+      assertEqual(
+        await driver.value("passphrase"),
+        SPACES_PASSPHRASE,
+        "prefilled passphrase"
+      );
+      assertEqual(
+        await driver.eval("document.querySelector('[data-testid=save-only]').checked"),
+        true,
+        "prefilled save-only"
+      );
+      assertEqual(await driver.eval("location.hash"), "", "fragment stripped");
+      assertEqual(requestCount(server.stats(), path), 0, "no fetch before Decrypt");
+
+      await driver.click("decrypt-button");
+      await waitForReview(driver);
+      assertEqual(await driver.text("review-filename"), "with-spaces", "filename");
+      assertEqual(requestCount(server.stats(), path), 1, "one fetch after Decrypt");
+    },
+  },
+  {
+    name: "u) Copy Link falls back to a selectable input when the clipboard rejects",
+    async run({ driver, server, app }) {
+      const target = server.url("/ok/hello.txt.age");
+
+      await driver.open(app);
+      await installClipboardStub(driver, { reject: true });
+      await driver.fill("file-url", target);
+      await driver.fill("passphrase", DEFAULT_PASS);
+      await driver.click("copy-link-button");
+
+      await driver.waitFor(
+        "document.querySelector('[data-testid=copy-link-fallback]').hidden === false",
+        10_000
+      );
+      const link = await driver.value("copy-link-fallback");
+      assert(
+        link.startsWith(`${app}#`),
+        `fallback link should start with ${app}#, got ${JSON.stringify(link)}`
+      );
+      const params = linkParams(link);
+      assertEqual(params.get("u"), target, "fallback URL");
+      assertEqual(params.get("pw"), DEFAULT_PASS, "fallback passphrase");
+      assertEqual(params.get("d"), null, "save-only off");
+      assertIncludes(
+        await driver.text("copy-link-status"),
+        "Copy the link below",
+        "fallback status"
+      );
+      assertEqual(
+        await driver.eval(`(() => {
+          const fallback = document.querySelector('[data-testid=copy-link-fallback]');
+          return fallback.selectionStart === 0 && fallback.selectionEnd === fallback.value.length;
+        })()`),
+        true,
+        "fallback link preselected"
+      );
+      assertEqual(await driver.eval("window.__copied"), null, "nothing copied");
+    },
+  },
+  {
+    name: "v) Copy Link with empty fields shows a hint and copies nothing",
+    async run({ driver, app }) {
+      const hint = "Enter a file URL and passphrase first.";
+
+      await driver.open(app);
+      await installClipboardStub(driver);
+      await driver.click("copy-link-button");
+      await driver.waitFor(
+        `document.querySelector('[data-testid=copy-link-status]').textContent === ${JSON.stringify(hint)}`,
+        10_000
+      );
+      assertEqual(await driver.eval("window.__copied"), null, "nothing copied");
+      assertEqual(
+        await driver.eval(
+          "document.querySelector('[data-testid=copy-link-fallback]').hidden"
+        ),
+        true,
+        "fallback stays hidden"
+      );
+
+      // A URL alone is still incomplete.
+      await driver.fill("file-url", "https://example.com/file.age");
+      await driver.eval(
+        "document.querySelector('[data-testid=copy-link-status]').textContent = ''"
+      );
+      await driver.click("copy-link-button");
+      await driver.waitFor(
+        `document.querySelector('[data-testid=copy-link-status]').textContent === ${JSON.stringify(hint)}`,
+        10_000
+      );
+      assertEqual(await driver.eval("window.__copied"), null, "still nothing copied");
     },
   },
 ];

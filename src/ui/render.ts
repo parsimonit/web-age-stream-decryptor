@@ -1,6 +1,12 @@
 import type { AppState } from "../core/types.ts";
 import { clearError, showError } from "./error.ts";
-import { focusFileUrl, setFormVisible, setFormWarning } from "./form.ts";
+import {
+  focusFileUrl,
+  resetCopyLink,
+  setFormBusy,
+  setFormVisible,
+  setFormWarning,
+} from "./form.ts";
 import { renderReview } from "./review.ts";
 import { clearStatus, showStatus } from "./status.ts";
 import { hideViewer, showViewer } from "./viewer.ts";
@@ -39,6 +45,9 @@ export function render(state: AppState, options: RenderOptions): void {
   const phaseChanged = key !== previousKey;
   lastKey = key;
 
+  // Transient link feedback and any fallback value never outlive a state change.
+  resetCopyLink();
+
   const { handlers } = options;
 
   switch (state.phase) {
@@ -48,6 +57,7 @@ export function render(state: AppState, options: RenderOptions): void {
       reviewPanel.replaceChildren();
       clearStatus(statusArea);
       form.hidden = false;
+      setFormBusy(false);
 
       if (state.error) showError(state.error);
       else clearError();
@@ -62,6 +72,7 @@ export function render(state: AppState, options: RenderOptions): void {
       reviewPanel.hidden = true;
       reviewPanel.replaceChildren();
       setFormVisible(false);
+      setFormBusy(true);
       clearError();
       setFormWarning(undefined);
       showStatus(statusArea, {
