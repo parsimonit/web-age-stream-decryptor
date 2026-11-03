@@ -18,13 +18,13 @@ export function sniffContentType(head: Uint8Array): ContentType {
   if (isPdf(head)) return PDF;
 
   const start = skipPreamble(head);
-  const window = asciiLower(head.subarray(start, start + SNIFF_WINDOW));
+  const preview = asciiLower(head.subarray(start, start + SNIFF_WINDOW));
 
-  if (HTML_MARKERS.some((marker) => window.includes(marker))) return HTML;
-  if (window.includes("<?xml")) {
-    return window.includes("<svg") ? SVG : BINARY;
+  if (HTML_MARKERS.some((marker) => preview.includes(marker))) return HTML;
+  if (preview.includes("<?xml")) {
+    return preview.includes("<svg") ? SVG : BINARY;
   }
-  if (window.includes("<svg")) return SVG;
+  if (preview.includes("<svg")) return SVG;
   return BINARY;
 }
 

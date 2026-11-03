@@ -1,4 +1,5 @@
 import type { DecryptRequest, FragmentParams, ReviewWarning } from "../core/types.ts";
+import { warningText } from "./warnings.ts";
 
 export interface FormHandlers {
   onSubmit: (request: DecryptRequest) => void;
@@ -6,15 +7,6 @@ export interface FormHandlers {
 
 function input(id: string): HTMLInputElement {
   return document.getElementById(id) as HTMLInputElement;
-}
-
-function warningText(warning: ReviewWarning): string {
-  switch (warning) {
-    case "insecure-http":
-      return "This file is served over plain HTTP (not HTTPS). The payload could be modified in transit.";
-    case "risky-extension":
-      return "The file name has an executable or script extension. Save it only if you trust the source.";
-  }
 }
 
 /** Wires the form's submit handler and keeps the DOM free of business logic. */

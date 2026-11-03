@@ -22,11 +22,19 @@ export const DEFAULT_PASSPHRASE = "correct horse battery staple";
 export const SPACES_PASSPHRASE = " pässword with spaces ";
 const FAST_WORK_FACTOR = 10;
 const BIG_PLAINTEXT_BYTES = 40 * 1024 * 1024;
+const LARGE_PLAINTEXT_BYTES = 12 * 1024 * 1024;
+const LARGE_DROP_AFTER = 11 * 1024 * 1024;
 const CHUNK_BYTES = 64 * 1024;
 const WRITE_DELAY_MS = 4;
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Builds a payload at most once, on first request, to keep startup fast. */
+function lazy(factory) {
+  let value;
+  return () => (value ??= factory());
 }
 
 async function encryptBytes(bytes, passphrase = DEFAULT_PASSPHRASE) {
@@ -87,6 +95,18 @@ async function buildPayloads() {
 
   const drop = await encryptBytes(patternBytes(2 * 1024 * 1024, 0x0badf00d));
 
+  const largeTampered = lazy(async () => {
+    const bytes = (
+      await encryptBytes(patternBytes(LARGE_PLAINTEXT_BYTES, 0x5eed1234))
+    ).slice();
+    // Corrupt a byte well past the buffer cap so review succeeds and Save fails.
+    bytes[bytes.length - 1024] ^= 0xff;
+    return bytes;
+  });
+  const largeDrop = lazy(() =>
+    encryptBytes(patternBytes(LARGE_PLAINTEXT_BYTES, 0x0ddba11))
+  );
+
   const htmlScript = await encryptBytes(HTML_WITH_SCRIPT);
 
   const variantTexts = ["variant-0", "variant-1", "variant-2"].map(
@@ -100,6 +120,8 @@ async function buildPayloads() {
     bigSha256: createHash("sha256").update(bigPlain).digest("hex"),
     tampered,
     drop,
+    largeTampered,
+    largeDrop,
     htmlScript,
     variants,
     variantSize: Buffer.byteLength(variantTexts[0]),
@@ -203,6 +225,34 @@ function sendAndDrop(res, entry, bytes) {
   });
 }
 
+/** Streams past the buffer cap and then drops the connection mid-payload. */
+async function streamThenDrop(res, entry, bytes, dropAfter) {
+  res.writeHead(200, {
+    "Content-Type": "application/octet-stream",
+    "Content-Length": bytes.length,
+    "Cache-Control": "no-store",
+    ...CORS_HEADERS,
+  });
+
+  for (let offset = 0; offset < bytes.length; offset += CHUNK_BYTES) {
+    if (res.destroyed) return;
+    const chunk = bytes.subarray(offset, offset + CHUNK_BYTES);
+    entry.bytesFlushed += chunk.length;
+    try {
+      if (!res.write(chunk)) await once(res, "drain");
+    } catch {
+      return;
+    }
+    if (res.destroyed) return;
+    if (offset + chunk.length >= dropAfter) {
+      res.destroy();
+      return;
+    }
+    await delay(WRITE_DELAY_MS);
+  }
+  if (!res.destroyed) res.end();
+}
+
 async function handle(req, res, payloads, stats, state) {
   const url = new URL(req.url ?? "/", "http://fixture.invalid");
   const pathname = url.pathname;
@@ -253,6 +303,20 @@ async function handle(req, res, payloads, stats, state) {
 
   if (pathname === "/tampered.age") {
     sendBytes(req, res, entry, payloads.tampered);
+    return;
+  }
+
+  if (pathname === "/tampered-large.age") {
+    const bytes = await payloads.largeTampered();
+    entry.bytesTotal = bytes.length;
+    sendBytes(req, res, entry, bytes);
+    return;
+  }
+
+  if (pathname === "/drop-large.age") {
+    const bytes = await payloads.largeDrop();
+    entry.bytesTotal = bytes.length;
+    await streamThenDrop(res, entry, bytes, LARGE_DROP_AFTER);
     return;
   }
 

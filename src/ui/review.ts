@@ -1,9 +1,11 @@
-import type { Review, ReviewWarning } from "../core/types.ts";
+import type { Review } from "../core/types.ts";
 import { formatBytes } from "./format.ts";
+import { warningText } from "./warnings.ts";
 
 export interface ReviewHandlers {
   onView: () => void;
   onSave: () => void;
+  onCancelSave: () => void;
   onCancel: () => void;
   onBack: () => void;
 }
@@ -23,15 +25,6 @@ function typeLabel(review: Review): string {
       return "PDF";
     case "binary":
       return "Binary file";
-  }
-}
-
-function warningText(warning: ReviewWarning): string {
-  switch (warning) {
-    case "insecure-http":
-      return "The file is served over plain HTTP, so it could be modified in transit.";
-    case "risky-extension":
-      return "The file name has an executable or script extension. Open it only if you trust the source.";
   }
 }
 
@@ -123,6 +116,13 @@ export function renderReview(
     status.setAttribute("role", "status");
     status.textContent = "Saving…";
     container.append(status);
+
+    const actions = document.createElement("div");
+    actions.className = "button-row review-actions";
+    actions.append(
+      button("Cancel", "save-cancel-button", "danger", options.onCancelSave)
+    );
+    container.append(actions);
     return;
   }
 

@@ -74,12 +74,7 @@ export interface Review {
 }
 
 export type AppState =
-  | {
-      phase: "idle";
-      prefill?: FragmentParams;
-      error?: AppError;
-      warning?: ReviewWarning;
-    }
+  | { phase: "idle"; error?: AppError; warning?: ReviewWarning }
   | { phase: "loading"; host: string }
   | { phase: "review"; review: Review }
   | { phase: "viewing"; review: Review; scripts: boolean }

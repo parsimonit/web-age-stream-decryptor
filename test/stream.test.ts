@@ -179,6 +179,30 @@ describe("openDecryptedStream — age header failures", () => {
     );
     await expect(openDecryptedStream(FILE_URL, PASSPHRASE)).rejects.toBe(abortError);
   });
+
+  it("fails fast when no header line arrives within 4 MiB and cancels the body", async () => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          controller.enqueue(new Uint8Array(64 * 1024).fill(0x41));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      },
+      { highWaterMark: 0 }
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => fakeResponse({ body }))
+    );
+
+    await expect(openDecryptedStream(FILE_URL, PASSPHRASE)).rejects.toMatchObject({
+      kind: "format",
+    });
+    expect(cancelled).toBe(true);
+  });
 });
 
 describe("openDecryptedStream — payload failures", () => {

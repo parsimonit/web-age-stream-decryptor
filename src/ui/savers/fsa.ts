@@ -1,3 +1,4 @@
+import { isAbortError } from "../../core/errors.ts";
 import type { Saver } from "./types.ts";
 
 interface PickerWritable {
@@ -29,20 +30,28 @@ export const fsaSaver: Saver = {
   canSave(): boolean {
     return isFsaSupported();
   },
-  async save(stream, filename): Promise<void> {
+  async save(source, filename, signal) {
     const picker = getPicker();
     if (!picker) throw new Error("File System Access API is unavailable");
 
     // Must run during the click handler: showSaveFilePicker needs user activation.
-    const handle = await picker({ suggestedName: filename });
-    const writable = await handle.createWritable();
+    // Only once the destination exists is the response stream consumed.
+    let writable: (PickerWritable & WritableStream<Uint8Array>) | undefined;
+    try {
+      const handle = await picker({ suggestedName: filename });
+      writable = await handle.createWritable();
+    } catch (error) {
+      if (isAbortError(error)) return "cancelled";
+      throw error;
+    }
 
     try {
-      await stream.pipeTo(writable);
+      await source().pipeTo(writable, signal ? { signal } : undefined);
     } catch (error) {
       // Abort so the browser discards the partial file instead of keeping it.
       await writable.abort().catch(() => undefined);
       throw error;
     }
+    return "saved";
   },
 };

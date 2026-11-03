@@ -1,5 +1,9 @@
 import { Decrypter } from "age-encryption";
+import { isAbortError } from "./errors.ts";
 import type { AppError, OpenedStream, StreamMeta } from "./types.ts";
+
+/** Upper bound on ciphertext read before the age header resolves. */
+const HEADER_LIMIT_BYTES = 4 * 1024 * 1024;
 
 /**
  * Fetches and starts decrypting an age file. The age header is validated before
@@ -39,12 +43,63 @@ async function decryptBody(
 ): Promise<ReadableStream<Uint8Array>> {
   const decrypter = new Decrypter();
   decrypter.addPassphrase(passphrase);
+  const bounded = boundHeader(body);
   try {
-    return await decrypter.decrypt(body);
+    const decrypted = await decrypter.decrypt(bounded.stream);
+    bounded.release();
+    return decrypted;
   } catch (error) {
+    bounded.release();
     if (isAbortError(error)) throw error;
     throw classifyHeaderError(error);
   }
+}
+
+/**
+ * Caps how much ciphertext the header parser may pull. A body that never
+ * yields a header line must fail as a format error instead of growing memory.
+ */
+function boundHeader(body: ReadableStream<Uint8Array>): {
+  stream: ReadableStream<Uint8Array>;
+  release: () => void;
+} {
+  const reader = body.getReader();
+  let total = 0;
+  let limiting = true;
+
+  const stream = new ReadableStream<Uint8Array>(
+    {
+      async pull(controller) {
+        try {
+          const { done, value } = await reader.read();
+          if (done) {
+            controller.close();
+            return;
+          }
+          total += value.byteLength;
+          if (limiting && total > HEADER_LIMIT_BYTES) {
+            await reader.cancel("age header too large").catch(() => undefined);
+            controller.error({ kind: "format" } as AppError);
+            return;
+          }
+          controller.enqueue(value);
+        } catch (error) {
+          controller.error(error);
+        }
+      },
+      cancel(reason) {
+        return reader.cancel(reason);
+      },
+    },
+    { highWaterMark: 0 }
+  );
+
+  return {
+    stream,
+    release() {
+      limiting = false;
+    },
+  };
 }
 
 function readMeta(headers: Headers): StreamMeta {
@@ -78,10 +133,6 @@ function mapReadErrors(source: ReadableStream<Uint8Array>): ReadableStream<Uint8
     },
     { highWaterMark: 0 }
   );
-}
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof DOMException && error.name === "AbortError";
 }
 
 function isNetworkError(error: unknown): boolean {

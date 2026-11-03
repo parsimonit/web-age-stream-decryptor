@@ -7,6 +7,7 @@ import { hideViewer, showViewer } from "./viewer.ts";
 
 export interface UiHandlers {
   onCancel: () => void;
+  onCancelSave: () => void;
   onView: () => void;
   onSave: () => void;
   onBack: () => void;
@@ -83,6 +84,7 @@ export function render(state: AppState, options: RenderOptions): void {
         mode: "review",
         onView: handlers.onView,
         onSave: handlers.onSave,
+        onCancelSave: handlers.onCancelSave,
         onCancel: handlers.onCancel,
         onBack: handlers.onBack,
       });
@@ -101,6 +103,7 @@ export function render(state: AppState, options: RenderOptions): void {
         mode: "saving",
         onView: handlers.onView,
         onSave: handlers.onSave,
+        onCancelSave: handlers.onCancelSave,
         onCancel: handlers.onCancel,
         onBack: handlers.onBack,
       });
@@ -118,6 +121,7 @@ export function render(state: AppState, options: RenderOptions): void {
         mode: "saved",
         onView: handlers.onView,
         onSave: handlers.onSave,
+        onCancelSave: handlers.onCancelSave,
         onCancel: handlers.onCancel,
         onBack: handlers.onBack,
       });

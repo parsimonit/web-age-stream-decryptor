@@ -79,8 +79,8 @@ Run dev server:
 
 Run quality checks:
 
-1. `npm run gate` runs every check below in order: `check:node`, `lint`, `typecheck`, `format:check`, `test:cov`, `build`, `audit:prod`
-2. Individual checks: `npm run lint`, `npm run typecheck`, `npm run format:check`, `npm run test:cov`, `npm run build`, `npm run audit:prod`
+1. `npm run gate` runs every check below in order: `check:node`, `lint`, `typecheck`, `format:check`, `test:cov`, `test:interop`, `build`, `audit:prod`
+2. Individual checks: `npm run lint`, `npm run typecheck`, `npm run format:check`, `npm run test:cov`, `npm run test:interop`, `npm run build`, `npm run audit:prod`
 
 Preview production build:
 

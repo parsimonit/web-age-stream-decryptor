@@ -37,6 +37,10 @@ function fragmentUrl(app, { u, pw, d }) {
   return `${app}#${params.toString()}`;
 }
 
+function fragmentHash(options) {
+  return fragmentUrl("", options);
+}
+
 function requestCount(stats, pathname) {
   return stats.paths[pathname]?.requests ?? 0;
 }
@@ -453,6 +457,153 @@ export const scenarios = [
         1,
         "one request for the whole run"
       );
+    },
+  },
+  {
+    name: "k) cancelling the save picker keeps review usable and one request",
+    async run({ driver, server, app }) {
+      const path = "/ok/hello.txt.age";
+      await driver.open(app);
+      await fillAndSubmit(driver, server.url(path));
+      await waitForReview(driver);
+
+      await driver.eval(`(() => {
+        window.__pickerCalls = 0;
+        window.showSaveFilePicker = async ({ suggestedName } = {}) => {
+          window.__pickerCalls += 1;
+          if (window.__pickerCalls === 1) {
+            throw new DOMException("cancelled", "AbortError");
+          }
+          const root = await navigator.storage.getDirectory();
+          return root.getFileHandle(suggestedName, { create: true });
+        };
+        return true;
+      })()`);
+
+      await driver.click("save-button");
+      await driver.waitFor(
+        "!!document.querySelector('[data-testid=save-button]')",
+        10_000
+      );
+      assertEqual(await driver.eval("window.__pickerCalls"), 1, "picker called once");
+      assertEqual(
+        await driver.eval(
+          "document.querySelector('[data-testid=status-text]')?.textContent ?? null"
+        ),
+        null,
+        "picker cancel must not stay in the saving state"
+      );
+
+      await driver.click("save-button");
+      await waitForSaved(driver);
+      assertEqual(await driver.eval("window.__pickerCalls"), 2, "picker called twice");
+      const info = await opfsFileInfo(driver, "hello.txt");
+      assert(info !== null, "saved file should exist after retry");
+      assertEqual(info.size, 12, "saved size");
+      assertEqual(requestCount(server.stats(), path), 1, "one fixture request total");
+    },
+  },
+  {
+    name: "l) hash change on a loaded page prefills and strips without fetching",
+    async run({ driver, server, app }) {
+      const path = "/ok/hello.txt.age";
+      const target = server.url(path);
+
+      await driver.open(app);
+      await waitForForm(driver);
+      await driver.setHash(fragmentHash({ u: target, pw: DEFAULT_PASS }));
+      await driver.waitFor(
+        `document.querySelector('[data-testid=file-url]').value === ${JSON.stringify(target)}`,
+        10_000
+      );
+
+      assertEqual(await driver.value("file-url"), target, "prefilled URL");
+      assertEqual(
+        await driver.value("passphrase"),
+        DEFAULT_PASS,
+        "prefilled passphrase"
+      );
+      assertEqual(await driver.eval("location.hash"), "", "fragment stripped");
+      assertEqual(requestCount(server.stats(), path), 0, "no fetch on hash change");
+    },
+  },
+  {
+    name: "m) save failure on oversize payloads leaves no partial file",
+    async run({ driver, server, app }) {
+      for (const [path, filename, expectedError] of [
+        ["/tampered-large.age", "tampered-large", /Decryption failed|interrupted/],
+        ["/drop-large.age", "drop-large", /interrupted/],
+      ]) {
+        await driver.open(app);
+        await installSaverStub(driver);
+        await fillAndSubmit(driver, server.url(path));
+        await waitForReview(driver, 60_000);
+        assert(await driver.exists("review-oversize"), `${path} should be oversize`);
+
+        await driver.click("save-button");
+        const message = await waitForError(driver, 60_000);
+        assert(
+          expectedError.test(message),
+          `${path} error was ${JSON.stringify(message)}`
+        );
+
+        const info = await opfsFileInfo(driver, filename);
+        assert(
+          info === null || info.size === 0,
+          `${path} left a partial file of ${info?.size} bytes`
+        );
+        assertEqual(requestCount(server.stats(), path), 1, `${path} one request`);
+      }
+    },
+  },
+  {
+    name: "n) anchor saver saves a small file without File System Access",
+    async run({ driver, server, app }) {
+      await driver.open(app);
+      await driver.eval("window.showSaveFilePicker = undefined; true");
+      assertEqual(
+        await driver.eval("typeof window.showSaveFilePicker"),
+        "undefined",
+        "picker removed"
+      );
+
+      await fillAndSubmit(driver, server.url("/ok/hello.txt.age"));
+      await waitForReview(driver);
+      await driver.click("save-button");
+      await waitForSaved(driver);
+      assertEqual(
+        await driver.eval(
+          "document.querySelector('[data-testid=error-banner]').hidden"
+        ),
+        true,
+        "anchor save must not surface an error"
+      );
+    },
+  },
+  {
+    name: "o) cancelling an in-progress save returns to the form without error",
+    async run({ driver, server, app }) {
+      const path = "/big.age";
+      await driver.open(app);
+      await installSaverStub(driver);
+      await fillAndSubmit(driver, server.url(path));
+      await waitForReview(driver, 60_000);
+
+      await driver.click("save-button");
+      await driver.waitFor(
+        "!!document.querySelector('[data-testid=save-cancel-button]')",
+        10_000
+      );
+      await driver.click("save-cancel-button");
+      await waitForForm(driver, 10_000);
+      assertEqual(
+        await driver.eval(
+          "document.querySelector('[data-testid=error-banner]').hidden"
+        ),
+        true,
+        "cancelling a save is not an error"
+      );
+      assertEqual(requestCount(server.stats(), path), 1, "one request for the run");
     },
   },
 ];

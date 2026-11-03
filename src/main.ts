@@ -1,6 +1,7 @@
 import { resolveMaxBufferBytes } from "./core/config.ts";
 import { bytesToStream, joinStream, loadUpTo } from "./core/buffer.ts";
 import { sniffContentType } from "./core/detect.ts";
+import { isAbortError } from "./core/errors.ts";
 import { filenameFor } from "./core/filename.ts";
 import { parseFragment } from "./core/fragment.ts";
 import { buildReview } from "./core/review.ts";
@@ -25,18 +26,9 @@ const maxBufferBytes = resolveMaxBufferBytes(import.meta.env.VITE_MAX_BUFFER_BYT
 let state: AppState = { phase: "idle" };
 let loaded: Loaded | null = null;
 let controller: AbortController | null = null;
+let saveController: AbortController | null = null;
 let lastWarning: ReviewWarning | undefined;
 let runToken = 0;
-
-function isAbort(error: unknown): boolean {
-  return (
-    (error instanceof DOMException && error.name === "AbortError") ||
-    (typeof error === "object" &&
-      error !== null &&
-      "name" in error &&
-      (error as { name?: unknown }).name === "AbortError")
-  );
-}
 
 const ERROR_KINDS = new Set([
   "network",
@@ -75,6 +67,8 @@ function setState(next: AppState): void {
 function release(): void {
   controller?.abort();
   controller = null;
+  saveController?.abort();
+  saveController = null;
   loaded = null;
 }
 
@@ -130,7 +124,7 @@ async function run(request: DecryptRequest): Promise<void> {
   } catch (error) {
     if (token !== runToken) return;
     release();
-    if (isAbort(error)) {
+    if (isAbortError(error)) {
       setState({ phase: "idle", warning: lastWarning });
       return;
     }
@@ -187,28 +181,44 @@ function save(): void {
   }
 
   // The picker must be opened synchronously from this click handler, so start
-  // the save before rendering the "saving" state.
-  const stream =
+  // the save before rendering the "saving" state. The stream itself is created
+  // only after the saver has a destination, so cancelling the picker leaves the
+  // in-flight response reusable.
+  const source = () =>
     current.kind === "complete"
       ? bytesToStream(current.bytes)
       : joinStream(current.prefix, current.rest);
-  const promise = saver.save(stream, review.filename);
+  saveController = new AbortController();
+  const promise = saver.save(source, review.filename, saveController.signal);
   setState({ phase: "saving", review });
 
   promise
-    .then(() => {
+    .then((outcome) => {
       if (state.phase !== "saving") return;
+      saveController = null;
+      if (outcome === "cancelled") {
+        setState({ phase: "review", review });
+        return;
+      }
       loaded = null;
       controller = null;
       setState({ phase: "saved", review });
     })
     .catch((error: unknown) => {
       if (state.phase !== "saving") return;
-      release();
-      if (isAbort(error)) {
-        setState({ phase: "review", review });
+      saveController = null;
+      if (isAbortError(error)) {
+        // A complete payload can be saved again; an oversize one had its
+        // remaining stream consumed, so start over from the form.
+        if (loaded?.kind === "complete") {
+          setState({ phase: "review", review });
+          return;
+        }
+        release();
+        setState({ phase: "idle", warning: lastWarning });
         return;
       }
+      release();
       setState({
         phase: "idle",
         error: asAppError(error, { kind: "interrupted" }),
@@ -217,8 +227,14 @@ function save(): void {
     });
 }
 
+function cancelSave(): void {
+  if (state.phase !== "saving") return;
+  saveController?.abort();
+}
+
 const handlers: UiHandlers = {
   onCancel: cancel,
+  onCancelSave: cancelSave,
   onView: view,
   onSave: save,
   onBack: backToStart,
@@ -226,15 +242,23 @@ const handlers: UiHandlers = {
   onCloseViewer: closeViewer,
 };
 
+/** Reads a fragment, always strips it, and prefills the form when idle. */
+function applyFragment(): void {
+  const hash = window.location.hash;
+  const params = parseFragment(hash);
+  history.replaceState(null, "", window.location.pathname + window.location.search);
+  if (state.phase !== "idle" || hash === "") return;
+  prefillForm(params);
+}
+
 function main(): void {
   bindForm({ onSubmit: (request) => void run(request) });
 
   // The fragment is a prefill convenience only; never auto-start, and always
   // strip it from the address bar immediately after reading it.
-  const params = parseFragment(window.location.hash);
-  history.replaceState(null, "", window.location.pathname + window.location.search);
-  prefillForm(params);
-  setState({ phase: "idle", prefill: params });
+  applyFragment();
+  setState({ phase: "idle" });
+  window.addEventListener("hashchange", applyFragment);
 }
 
 if (document.readyState === "loading") {

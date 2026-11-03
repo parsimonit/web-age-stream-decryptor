@@ -124,6 +124,11 @@ export class AgentBrowserDriver {
     );
   }
 
+  /** Changes only the fragment, without a full navigation. */
+  async setHash(hash) {
+    await this.eval(`location.hash = ${JSON.stringify(hash)}`);
+  }
+
   async attr(testId, name) {
     return this.eval(
       `document.querySelector(${JSON.stringify(selectorForTestId(testId))})?.getAttribute(${JSON.stringify(name)}) ?? null`

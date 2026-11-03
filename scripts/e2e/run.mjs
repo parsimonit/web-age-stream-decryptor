@@ -199,7 +199,7 @@ async function main() {
   }
 
   results.push({
-    name: "k) CSP/console clean across all scenarios",
+    name: "z) CSP/console clean across all scenarios",
     status: cspIssues === 0 && cleanupIssues.length === 0 ? "pass" : "fail",
     detail:
       cspIssues === 0 && cleanupIssues.length === 0
