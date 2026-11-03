@@ -1,0 +1,1 @@
+passphrase with leading and trailing spaces, plus a non-ASCII character: pässword

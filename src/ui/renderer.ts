@@ -1,7 +1,15 @@
 import type { DecryptResult } from "../core/types.ts";
 
+/**
+ * Copies decrypted bytes into a plain ArrayBuffer-backed view so the result is a
+ * valid BlobPart under TypeScript's typed-array generics.
+ */
+function toBlobPart(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
+  return new Uint8Array(bytes);
+}
+
 function triggerDownload(bytes: Uint8Array, filename: string): void {
-  const blob = new Blob([bytes], {
+  const blob = new Blob([toBlobPart(bytes)], {
     type: "application/octet-stream",
   });
   const blobUrl = URL.createObjectURL(blob);
@@ -25,13 +33,15 @@ function triggerDownload(bytes: Uint8Array, filename: string): void {
  * For viewable content (HTML/PDF), replaces the current page.
  * For binary content, triggers download and shows status message.
  */
-export function renderResult(
-  result: DecryptResult,
-  forceDownload = false
-): void {
-  if (!forceDownload && (result.contentType.kind === "html" || result.contentType.kind === "pdf")) {
+export function renderResult(result: DecryptResult, forceDownload = false): void {
+  if (
+    !forceDownload &&
+    (result.contentType.kind === "html" || result.contentType.kind === "pdf")
+  ) {
     // US-01.1: replace the current document with the decrypted Blob URL.
-    const blob = new Blob([result.bytes], { type: result.contentType.mimeType });
+    const blob = new Blob([toBlobPart(result.bytes)], {
+      type: result.contentType.mimeType,
+    });
     const blobUrl = URL.createObjectURL(blob);
     location.replace(blobUrl);
     return;

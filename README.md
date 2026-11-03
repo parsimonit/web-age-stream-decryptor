@@ -3,6 +3,7 @@
 Client-side Age passphrase decryption in the browser.
 
 This app fetches an encrypted Age payload over HTTPS, decrypts it in-browser, and then either:
+
 - navigates to rendered content for HTML and PDF
 - downloads decrypted bytes for other content types, or when force-download is enabled
 
@@ -32,28 +33,32 @@ Live app: https://decrypt-app.zebrastream.io/
 - No server-side decryption. No backend persistence.
 
 Important:
+
 - Anyone with access to the full fragment URL can decrypt the target payload.
 - Treat fragment links as secrets.
 - Decrypted HTML content is navigated to directly (`location.replace` on a Blob URL) and will execute any script it contains. Only decrypt HTML payloads from sources you trust.
 
 ## Tech stack
 
-| Component | Tool | Why |
-|-----------|------|-----|
-| **Language** | TypeScript (strict) | Type safety for data-heavy logic; better AI suggestions and refactor safety than plain JS |
-| **Build / Dev Server** | Vite | Fast HMR, minimal config for vanilla TS + HTML/CSS |
-| **Testing** | Vitest | Vite-native; runs pure processing modules without a browser context |
-| **Linting** | ESLint (TypeScript-aware) | Enforces code quality rules consistently |
-| **Formatting** | Prettier | Removes formatting discussions from code review |
-| **Crypto** | age-encryption | Native TS/JS, Web Crypto API when available, streaming, no WASM |
+| Component              | Tool                      | Why                                                                                       |
+| ---------------------- | ------------------------- | ----------------------------------------------------------------------------------------- |
+| **Language**           | TypeScript (strict)       | Type safety for data-heavy logic; better AI suggestions and refactor safety than plain JS |
+| **Build / Dev Server** | Vite                      | Fast HMR, minimal config for vanilla TS + HTML/CSS                                        |
+| **Testing**            | Vitest                    | Vite-native; runs pure processing modules without a browser context                       |
+| **Linting**            | ESLint (TypeScript-aware) | Enforces code quality rules consistently                                                  |
+| **Formatting**         | Prettier                  | Removes formatting discussions from code review                                           |
+| **Crypto**             | age-encryption            | Native TS/JS, Web Crypto API when available, streaming, no WASM                           |
 
 Runtime dependencies: none by default. Any addition requires explicit justification.
 
 ## Local development
 
 Prerequisites:
-- Node.js 20+
+
+- Node.js 26+
 - npm 10+
+
+The Node.js major is pinned in `.nvmrc`; `npm run check:node` verifies that `.nvmrc`, `package.json` engines, `devbox.json`, and CI agree. With devbox installed, `devbox run -- npm run gate` runs the full check suite inside the devbox environment.
 
 Install:
 
@@ -65,9 +70,8 @@ Run dev server:
 
 Run quality checks:
 
-1. npm run lint
-2. npm test
-3. npm run build
+1. `npm run gate` runs every check below in order: `check:node`, `lint`, `typecheck`, `format:check`, `test:cov`, `build`, `audit:prod`
+2. Individual checks: `npm run lint`, `npm run typecheck`, `npm run format:check`, `npm run test:cov`, `npm run build`, `npm run audit:prod`
 
 Preview production build:
 
@@ -93,6 +97,7 @@ Rule: `src/core` must not depend on DOM APIs. `src/ui` may depend on `src/core`,
 ## Roadmap / known gaps
 
 Not yet implemented:
+
 - Harden HTML content detection (BOM/whitespace/doctype edge cases)
 - Use `Content-Disposition` metadata to improve download filenames
 - Loading spinner in the status area during decryption

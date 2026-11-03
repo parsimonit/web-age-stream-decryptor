@@ -17,9 +17,8 @@ Thanks for contributing.
 
 ## Validation before PR
 
-1. npm run lint
-2. npm test
-3. npm run build
+1. `npm run gate` (or `devbox run -- npm run gate` inside devbox)
+   - runs `check:node`, `lint`, `typecheck`, `format:check`, `test:cov`, `build`, `audit:prod`
 
 ## Pull request guidance
 

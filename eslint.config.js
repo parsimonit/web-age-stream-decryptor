@@ -32,6 +32,27 @@ export default [
       ...js.configs.recommended.rules,
       ...tsPlugin.configs.recommended.rules,
       "@typescript-eslint/no-explicit-any": "error",
+      "no-console": "error",
+    },
+  },
+  {
+    // Scripts are plain ESM tooling that legitimately talks to the console.
+    files: ["scripts/**/*.mjs", "scripts/**/*.js"],
+    languageOptions: {
+      ecmaVersion: "latest",
+      sourceType: "module",
+      globals: {
+        console: "readonly",
+        process: "readonly",
+        Buffer: "readonly",
+        URL: "readonly",
+        URLSearchParams: "readonly",
+        setTimeout: "readonly",
+        clearTimeout: "readonly",
+      },
+    },
+    rules: {
+      ...js.configs.recommended.rules,
     },
   },
 ];

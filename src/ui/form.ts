@@ -25,7 +25,9 @@ export function bindForm(opts: {
   const forceDownloadInput = document.getElementById(
     "force-download"
   ) as HTMLInputElement;
-  const copyLinkButton = document.getElementById("copy-link-button") as HTMLButtonElement;
+  const copyLinkButton = document.getElementById(
+    "copy-link-button"
+  ) as HTMLButtonElement;
 
   form.addEventListener("submit", (e) => {
     e.preventDefault();
@@ -98,7 +100,9 @@ export function bindForm(opts: {
  */
 export function setFormState(phase: AppState["phase"]): void {
   const decryptButton = document.getElementById("decrypt-button") as HTMLButtonElement;
-  const copyLinkButton = document.getElementById("copy-link-button") as HTMLButtonElement;
+  const copyLinkButton = document.getElementById(
+    "copy-link-button"
+  ) as HTMLButtonElement;
 
   if (phase === "loading") {
     decryptButton.disabled = true;
