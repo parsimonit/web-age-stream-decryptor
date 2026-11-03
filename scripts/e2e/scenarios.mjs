@@ -5,9 +5,19 @@
  * Only the driver API is used here; scripts/e2e/driver.mjs is the sole
  * agent-browser-aware module.
  */
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { DEFAULT_PASSPHRASE, SPACES_PASSPHRASE } from "./server.mjs";
 
 const DEFAULT_PASS = DEFAULT_PASSPHRASE;
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function sha256File(path) {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -39,6 +49,11 @@ function fragmentUrl(app, { u, pw, d }) {
 
 function fragmentHash(options) {
   return fragmentUrl("", options);
+}
+
+/** Test hook from README: force a download destination via the query string. */
+function saverUrl(app, saver) {
+  return `${app}?saver=${saver}`;
 }
 
 function requestCount(stats, pathname) {
@@ -604,6 +619,128 @@ export const scenarios = [
         "cancelling a save is not an error"
       );
       assertEqual(requestCount(server.stats(), path), 1, "one request for the run");
+    },
+  },
+  {
+    name: "p) ?saver=sw streams an oversize file to a real download (size/SHA-256, one request)",
+    async run({ driver, server, app, expected }) {
+      const path = "/big.age";
+      await driver.open(saverUrl(app, "sw"));
+      await fillAndSubmit(driver, server.url(path));
+      await waitForReview(driver, 60_000);
+      assert(await driver.exists("review-oversize"), "oversize note");
+      assert(await driver.exists("save-button"), "Save offered");
+
+      await driver.click("save-button");
+      await waitForSaved(driver, 120_000);
+
+      assertEqual(
+        await driver.eval(
+          "document.querySelector('[data-testid=error-banner]').hidden"
+        ),
+        true,
+        "no error after a streamed save"
+      );
+      assert(
+        await driver.eval(
+          "(async () => !!(await navigator.serviceWorker.getRegistration()))()"
+        ),
+        "the save registered the service worker lazily"
+      );
+
+      const file = await driver.waitForDownload("big", 60_000);
+      assertEqual(file.size, expected.bigSize, "downloaded size");
+      assertEqual(sha256File(file.path), expected.bigSha256, "downloaded SHA-256");
+      assertEqual(requestCount(server.stats(), path), 1, "one fixture request");
+    },
+  },
+  {
+    name: "q) ?saver=sw failure: error banner, no complete download",
+    async run({ driver, server, app, expected }) {
+      for (const [path, filename, expectedError] of [
+        ["/tampered-large.age", "tampered-large", /Decryption failed|interrupted/],
+        ["/drop-large.age", "drop-large", /interrupted/],
+      ]) {
+        await driver.open(saverUrl(app, "sw"));
+        await fillAndSubmit(driver, server.url(path));
+        await waitForReview(driver, 60_000);
+        assert(await driver.exists("review-oversize"), `${path} should be oversize`);
+
+        await driver.click("save-button");
+        const message = await waitForError(driver, 60_000);
+        assert(
+          expectedError.test(message),
+          `${path} error was ${JSON.stringify(message)}`
+        );
+        assertEqual(requestCount(server.stats(), path), 1, `${path} one request`);
+
+        // Record what the browser's download manager did with the failed stream.
+        await delay(1_000);
+        const files = driver.listDownloads();
+        console.log(
+          `    SW saver failure after ${path}: ${
+            files.map((file) => `${file.name}=${file.size}B`).join(", ") || "no file"
+          }`
+        );
+        const complete = files.find(
+          (file) => file.complete && file.name.startsWith(filename)
+        );
+        assert(
+          complete === undefined || complete.size < expected.largeSize,
+          `${path} left a complete ${complete?.size}-byte file`
+        );
+      }
+    },
+  },
+  {
+    name: "r) ?saver=sw Cancel during saving aborts the download without an error",
+    async run({ driver, server, app }) {
+      const path = "/big.age";
+      await driver.open(saverUrl(app, "sw"));
+      await fillAndSubmit(driver, server.url(path));
+      await waitForReview(driver, 60_000);
+
+      await driver.click("save-button");
+      await driver.waitFor(
+        "!!document.querySelector('[data-testid=save-cancel-button]')",
+        10_000
+      );
+      // Let the service worker start pulling before cancelling.
+      await delay(500);
+      await driver.click("save-cancel-button");
+      await waitForForm(driver, 15_000);
+
+      assertEqual(
+        await driver.eval(
+          "document.querySelector('[data-testid=error-banner]').hidden"
+        ),
+        true,
+        "cancelling a save is not an error"
+      );
+      await waitForStats(
+        server,
+        (stats) => (stats.paths[path]?.aborted ?? 0) >= 1,
+        20_000
+      );
+      assertEqual(requestCount(server.stats(), path), 1, "one request for the run");
+    },
+  },
+  {
+    name: "s) ?saver=anchor refuses an oversize file with the unsupported message",
+    async run({ driver, server, app }) {
+      const path = "/big.age";
+      await driver.open(saverUrl(app, "anchor"));
+      await fillAndSubmit(driver, server.url(path));
+      await waitForReview(driver, 60_000);
+
+      await driver.click("save-button");
+      assertIncludes(
+        await waitForError(driver, 20_000),
+        "cannot stream it to disk",
+        "unsupported message"
+      );
+      assert(await driver.exists("save-button"), "review stays usable");
+      assertEqual(requestCount(server.stats(), path), 1, "one request, no retry");
     },
   },
 ];

@@ -395,6 +395,7 @@ export async function startFixtureServer() {
       bigSha256: payloads.bigSha256,
       bigCipherSize: payloads.big.length,
       variantSize: payloads.variantSize,
+      largeSize: LARGE_PLAINTEXT_BYTES,
     },
     async close() {
       server.closeAllConnections();

@@ -27,8 +27,13 @@ Live app: https://decrypt-app.zebrastream.io/
 - PDF review opens the browser's PDF viewer in an iframe
 - Save-only mode from the checkbox or fragment (`d=1`), which hides View
 - Content detection for HTML, SVG, PDF, and binary
-- 10 MiB in-memory cap: larger payloads are reviewable as save-only and streamed to disk with the File System Access API in Chromium browsers
+- 10 MiB in-memory cap: larger payloads are reviewable as save-only and streamed to disk — through the File System Access API in Chromium, or through a service-worker download in browsers without it
 - User-friendly error handling for network, CORS, HTTP, format, decrypt, and interrupted downloads
+
+## Browser support
+
+- **Chromium**: streaming saves above the 10 MiB cap use the File System Access API.
+- **Firefox/Safari**: the same large files are streamed into the browser's download manager by a service worker (requires a secure context). This path is implemented and exercised in Chromium through the test hook below, but Firefox and Safari have not been verified automatically yet; a manual check is still pending.
 
 ## Security model
 
@@ -38,7 +43,7 @@ Live app: https://decrypt-app.zebrastream.io/
 - A review step shows what will be viewed or saved before any content is rendered or written.
 - Decrypted HTML/SVG runs in a sandboxed iframe. Scripts stay disabled unless the user opts in; even then the frame has no same-origin access to the app, its storage, or its DOM.
 - Plain `http://` file URLs (non-loopback) are flagged as insecure before fetching. HTTPS pages cannot fetch plain HTTP; the browser blocks it as mixed content.
-- Payloads up to the 10 MiB cap are held in memory. Larger files are never rendered and are only streamed to disk on Chromium browsers with the File System Access API; other browsers do not support files over the cap.
+- Payloads up to the 10 MiB cap are held in memory. Larger files are never rendered: they are streamed to disk through the File System Access API where available, otherwise through a service worker that relays the decrypted stream into the browser's download manager. Non-download requests are never intercepted, the worker never caches or fetches anything itself, and it only answers one-shot, unguessable ids registered by the page moments earlier. A failed or cancelled download can leave a partial file that the page cannot delete.
 - No server-side decryption. No backend persistence.
 
 Important:
@@ -93,11 +98,14 @@ Run the browser E2E release gate:
 3. The first E2E run needs Chrome for agent-browser: run `npx agent-browser install` if it is missing
 4. E2E is local for now and is CI-equivalent via `npm run e2e`; see the roadmap for an optional CI job
 
+Test hook: append `?saver=fsa|sw|anchor` to the app URL to force a save destination; `?saver=sw` exercises the service-worker path in Chromium.
+
 ## Project layout
 
 - [src/core](src/core): Pure processing logic (decrypt, detection, fragment parsing, shared types)
 - [src/ui](src/ui): DOM adapters and rendering behavior
 - [src/main.ts](src/main.ts): App orchestration
+- [public](public): Static files copied as-is by the build (the download service worker)
 - [test](test): Unit tests for core logic
 - [scripts/e2e](scripts/e2e): Browser E2E orchestrator, fixture server, scenarios, and the agent-browser driver
 
@@ -117,8 +125,8 @@ Rule: `src/core` must not depend on DOM APIs. `src/ui` may depend on `src/core`,
 Not yet implemented:
 
 - Auto-start after confirmation: remember consent per content kind in localStorage (never keyed by URL/passphrase, never persisting the fragment; cookies are the wrong tool since they are sent to the host; consent must be revocable/optional)
-- Cross-browser streamed save for Firefox/Safari via a service-worker saver
 - Cross-browser e2e (Playwright: Chromium/Firefox/WebKit); may replace agent-browser only once it covers every scenario; only `scripts/e2e/driver.mjs` should need replacing
+- Manual verification of the service-worker saver in Firefox and Safari (only Chromium is automated so far)
 - Optional CI job for e2e (`npm run e2e`; Chrome via `npx agent-browser install`; devbox env also works)
 
 ## Contributing

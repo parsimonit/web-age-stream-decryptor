@@ -18,9 +18,18 @@ import { clearError, showErrorMessage } from "./ui/error.ts";
 import { bindForm, prefillForm } from "./ui/form.ts";
 import { formatBytes } from "./ui/format.ts";
 import { render, type UiHandlers } from "./ui/render.ts";
-import { pickSaver } from "./ui/savers/index.ts";
+import { parseSaverOverride, pickSaver } from "./ui/savers/index.ts";
 
 const maxBufferBytes = resolveMaxBufferBytes(import.meta.env.VITE_MAX_BUFFER_BYTES);
+
+/**
+ * Test hook, not product behavior: `?saver=fsa|sw|anchor` forces a download
+ * destination so the service-worker path is exercisable in Chromium. Read from
+ * the query string (never the fragment, which stays secret). See README.
+ */
+const saverOverride = parseSaverOverride(
+  new URLSearchParams(window.location.search).get("saver")
+);
 
 /** Transient resources deliberately kept out of AppState. */
 let state: AppState = { phase: "idle" };
@@ -171,7 +180,7 @@ function save(): void {
   const current = loaded;
   if (!current) return;
 
-  const saver = pickSaver(review);
+  const saver = pickSaver(review, saverOverride);
   if (!saver) {
     clearError();
     showErrorMessage(

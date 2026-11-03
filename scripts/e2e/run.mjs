@@ -163,6 +163,7 @@ async function main() {
 
     for (const scenario of scenarios) {
       fixture.reset();
+      driver.clearDownloads();
       await driver.clearConsole();
       await driver.clearPageErrors();
       const started = Date.now();

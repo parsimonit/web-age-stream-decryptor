@@ -22,6 +22,8 @@ export default [
         location: "readonly",
         history: "readonly",
         navigator: "readonly",
+        crypto: "readonly",
+        MessageChannel: "readonly",
         HTMLFormElement: "readonly",
         HTMLInputElement: "readonly",
         HTMLButtonElement: "readonly",
@@ -106,6 +108,25 @@ export default [
           ],
         },
       ],
+    },
+  },
+  {
+    // The download service worker is plain JS served as-is from public/.
+    files: ["public/sw.js"],
+    languageOptions: {
+      ecmaVersion: "latest",
+      sourceType: "script",
+      globals: {
+        self: "readonly",
+        clients: "readonly",
+        Response: "readonly",
+        Headers: "readonly",
+        ReadableStream: "readonly",
+        URL: "readonly",
+      },
+    },
+    rules: {
+      ...js.configs.recommended.rules,
     },
   },
   {

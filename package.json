@@ -23,7 +23,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:cov": "vitest run --coverage --exclude test/interop.test.ts",
-    "lint": "eslint src test scripts",
+    "lint": "eslint src test scripts public",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

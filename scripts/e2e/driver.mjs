@@ -5,7 +5,14 @@
  * without touching scripts/e2e/scenarios.mjs.
  */
 import { execFile } from "node:child_process";
-import { unlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -44,12 +51,15 @@ function selectorForTestId(testId) {
 }
 
 export class AgentBrowserDriver {
-  constructor({ session, bin = DEFAULT_BIN } = {}) {
+  constructor({ session, bin = DEFAULT_BIN, downloadDir } = {}) {
     if (!session) throw new Error("driver needs an isolated session name");
     this.session = session;
     this.bin = bin;
     this.opened = false;
     this.closed = false;
+    this.downloadDir =
+      downloadDir ?? join(tmpdir(), `age-e2e-downloads-${process.pid}`);
+    this.clearDownloads();
     this.initScriptPath = join(tmpdir(), `age-e2e-csp-${process.pid}.js`);
     writeFileSync(this.initScriptPath, CSP_INIT_SCRIPT, "utf8");
   }
@@ -60,6 +70,7 @@ export class AgentBrowserDriver {
       const { stdout } = await execFileAsync(this.bin, full, {
         maxBuffer: MAX_BUFFER,
         timeout: CALL_TIMEOUT_MS,
+        env: { ...process.env, AGENT_BROWSER_DOWNLOAD_PATH: this.downloadDir },
       });
       const parsed = parseJson(stdout);
       if (!parsed.success) {
@@ -208,6 +219,57 @@ export class AgentBrowserDriver {
     return this.eval("window.__cspViolations ?? []");
   }
 
+  /** Wipes the per-session download directory before a scenario. */
+  clearDownloads() {
+    rmSync(this.downloadDir, { recursive: true, force: true });
+    mkdirSync(this.downloadDir, { recursive: true });
+  }
+
+  /** Files the browser download manager has produced so far. */
+  listDownloads() {
+    try {
+      return readdirSync(this.downloadDir).map((name) => {
+        const path = join(this.downloadDir, name);
+        const { size } = statSync(path);
+        return { name, path, size, complete: !name.endsWith(".crdownload") };
+      });
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Waits for a finished download whose name starts with `name` and whose size
+   * has stopped changing. Chromium writes a `.crdownload` file first.
+   */
+  async waitForDownload(name, timeout = 60_000) {
+    const deadline = Date.now() + timeout;
+    let previous = null;
+    for (;;) {
+      const candidate = this.listDownloads().find(
+        (file) => file.complete && (name === undefined || file.name.startsWith(name))
+      );
+      if (
+        candidate &&
+        previous &&
+        previous.path === candidate.path &&
+        previous.size === candidate.size
+      ) {
+        return candidate;
+      }
+      previous = candidate ?? null;
+      if (Date.now() >= deadline) {
+        const seen = this.listDownloads()
+          .map((file) => `${file.name} (${file.size} bytes)`)
+          .join(", ");
+        throw new Error(
+          `Timed out after ${timeout}ms waiting for download ${name ?? "*"}; saw: ${seen || "nothing"}`
+        );
+      }
+      await delay(150);
+    }
+  }
+
   async close() {
     if (this.closed) return;
     this.closed = true;
@@ -220,6 +282,11 @@ export class AgentBrowserDriver {
       unlinkSync(this.initScriptPath);
     } catch {
       // Already removed.
+    }
+    try {
+      rmSync(this.downloadDir, { recursive: true, force: true });
+    } catch {
+      // Best effort.
     }
   }
 }
