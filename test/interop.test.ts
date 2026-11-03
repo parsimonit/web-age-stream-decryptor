@@ -1,6 +1,7 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { readFileSync } from "node:fs";
-import { fetchAndDecrypt } from "../src/core/decrypt.ts";
+import { openDecryptedStream } from "../src/core/stream.ts";
+import { loadUpTo } from "../src/core/buffer.ts";
 
 /**
  * Interop tests against fixtures produced by the real age CLI v1.3.2
@@ -11,6 +12,8 @@ import { fetchAndDecrypt } from "../src/core/decrypt.ts";
  * scrypt is deliberately slow, so each test gets a generous timeout.
  */
 const TEST_TIMEOUT_MS = 30_000;
+/** Larger than any fixture; keeps the whole plaintext in one Loaded.complete. */
+const TEST_CAP = 4 * 1024 * 1024;
 
 const DEFAULT_PASSPHRASE = "correct horse battery staple";
 // Leading/trailing spaces and a non-ASCII character are intentional.
@@ -65,14 +68,20 @@ function toHex(bytes: Uint8Array): string {
 function stubFetchWithBytes(bytes: Uint8Array): void {
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => {
-      return {
-        ok: true,
-        status: 200,
-        body: new Blob([bytes as BlobPart]).stream(),
-      } as unknown as Response;
-    })
+    vi.fn(async () => new Response(bytes as unknown as BodyInit, { status: 200 }))
   );
+}
+
+async function decryptFixture(name: string, passphrase: string): Promise<Uint8Array> {
+  const opened = await openDecryptedStream(
+    `https://fixtures.example/${name}`,
+    passphrase
+  );
+  const loaded = await loadUpTo(opened.stream, TEST_CAP);
+  if (loaded.kind !== "complete") {
+    throw new Error("fixture exceeded the test buffer cap");
+  }
+  return loaded.bytes;
 }
 
 afterEach(() => {
@@ -80,7 +89,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("real-age interop — fetchAndDecrypt", () => {
+describe("real-age interop — openDecryptedStream + loadUpTo", () => {
   for (const fixture of FIXTURES) {
     it(
       `decrypts ${fixture.ciphertext} to the exact plaintext bytes`,
@@ -89,10 +98,7 @@ describe("real-age interop — fetchAndDecrypt", () => {
         const expected = readFixture(`plain/${fixture.plaintext}`);
         stubFetchWithBytes(ciphertext);
 
-        const actual = await fetchAndDecrypt(
-          `https://fixtures.example/${fixture.ciphertext}`,
-          fixture.passphrase
-        );
+        const actual = await decryptFixture(fixture.ciphertext, fixture.passphrase);
 
         expect(actual.length).toBe(expected.length);
         expect(toHex(actual)).toBe(toHex(expected));
@@ -109,10 +115,7 @@ describe("real-age interop — fetchAndDecrypt", () => {
       expect(expected.length).toBe(200 * 1024);
 
       stubFetchWithBytes(ciphertext);
-      const actual = await fetchAndDecrypt(
-        "https://fixtures.example/multichunk.bin.age",
-        DEFAULT_PASSPHRASE
-      );
+      const actual = await decryptFixture("multichunk.bin.age", DEFAULT_PASSPHRASE);
 
       expect(actual.length).toBe(200 * 1024);
       expect(toHex(actual)).toBe(toHex(expected));
@@ -125,17 +128,12 @@ describe("real-age interop — fetchAndDecrypt", () => {
     async () => {
       stubFetchWithBytes(readFixture("hello.txt.age"));
 
-      let error: unknown;
-      try {
-        await fetchAndDecrypt(
+      await expect(
+        openDecryptedStream(
           "https://fixtures.example/hello.txt.age",
           "wrong passphrase"
-        );
-      } catch (caught) {
-        error = caught;
-      }
-
-      expect(error).toMatchObject({ kind: "decrypt" });
+        )
+      ).rejects.toMatchObject({ kind: "decrypt" });
     },
     TEST_TIMEOUT_MS
   );

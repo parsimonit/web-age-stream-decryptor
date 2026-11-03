@@ -1,121 +1,242 @@
-import type { DecryptRequest, DecryptResult } from "./core/types.ts";
-import { fetchAndDecrypt } from "./core/decrypt.ts";
-import { detectContentType, extractFilename } from "./core/detect.ts";
-import { parseFragment, toDecryptRequest } from "./core/fragment.ts";
-import { bindForm, setFormState, hideForm, showForm, prefillForm } from "./ui/form.ts";
-import { renderResult, clearStatusArea } from "./ui/renderer.ts";
-import { showError, clearError } from "./ui/error.ts";
+import { resolveMaxBufferBytes } from "./core/config.ts";
+import { bytesToStream, joinStream, loadUpTo } from "./core/buffer.ts";
+import { sniffContentType } from "./core/detect.ts";
+import { filenameFor } from "./core/filename.ts";
+import { parseFragment } from "./core/fragment.ts";
+import { buildReview } from "./core/review.ts";
+import { openDecryptedStream } from "./core/stream.ts";
+import type {
+  AppError,
+  AppState,
+  DecryptRequest,
+  Loaded,
+  ReviewWarning,
+} from "./core/types.ts";
+import { checkUrl } from "./core/url.ts";
+import { clearError, showErrorMessage } from "./ui/error.ts";
+import { bindForm, prefillForm } from "./ui/form.ts";
+import { formatBytes } from "./ui/format.ts";
+import { render, type UiHandlers } from "./ui/render.ts";
+import { pickSaver } from "./ui/savers/index.ts";
 
-/**
- * Main entry point - handles fragment-driven auto-decryption or shows form
- */
-function main() {
-  bindForm({
-    onSubmit: handleDecrypt,
-    onReset: handleReset,
-  });
+const maxBufferBytes = resolveMaxBufferBytes(import.meta.env.VITE_MAX_BUFFER_BYTES);
 
-  // Parse fragment for auto-decrypt and partial-prefill handling
-  const fragmentParams = parseFragment(window.location.hash);
-  const fragmentRequest = toDecryptRequest(fragmentParams);
+/** Transient resources deliberately kept out of AppState. */
+let state: AppState = { phase: "idle" };
+let loaded: Loaded | null = null;
+let controller: AbortController | null = null;
+let lastWarning: ReviewWarning | undefined;
+let runToken = 0;
 
-  if (fragmentRequest) {
-    // Auto-decryption: clear passphrase from address bar immediately
-    history.replaceState(null, "", location.pathname + location.search);
+function isAbort(error: unknown): boolean {
+  return (
+    (error instanceof DOMException && error.name === "AbortError") ||
+    (typeof error === "object" &&
+      error !== null &&
+      "name" in error &&
+      (error as { name?: unknown }).name === "AbortError")
+  );
+}
 
-    // Hide form and start decryption
-    hideForm();
+const ERROR_KINDS = new Set([
+  "network",
+  "fetch",
+  "mixed-content",
+  "format",
+  "decrypt",
+  "interrupted",
+]);
+
+function isAppError(error: unknown): error is AppError {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "kind" in error &&
+    typeof (error as { kind?: unknown }).kind === "string" &&
+    ERROR_KINDS.has((error as { kind: string }).kind)
+  );
+}
+
+function asAppError(error: unknown, fallback: AppError): AppError {
+  return isAppError(error) ? error : fallback;
+}
+
+function viewerBytes(): Uint8Array | undefined {
+  return state.phase === "viewing" && loaded?.kind === "complete"
+    ? loaded.bytes
+    : undefined;
+}
+
+function setState(next: AppState): void {
+  state = next;
+  render(state, { cap: maxBufferBytes, viewerBytes: viewerBytes(), handlers });
+}
+
+function release(): void {
+  controller?.abort();
+  controller = null;
+  loaded = null;
+}
+
+/** Single execution path: preflight -> fetch/decrypt -> bounded read -> review. */
+async function run(request: DecryptRequest): Promise<void> {
+  runToken += 1;
+  const token = runToken;
+  release();
+
+  const checked = checkUrl(request.fileUrl, window.location.protocol);
+  if (!checked.ok) {
+    setState({ phase: "idle", error: checked.error });
+    return;
+  }
+
+  lastWarning = checked.warning;
+  controller = new AbortController();
+  setState({ phase: "loading", host: checked.host });
+
+  try {
+    const opened = await openDecryptedStream(
+      request.fileUrl,
+      request.passphrase,
+      controller.signal
+    );
+    if (token !== runToken) return;
+
+    const result = await loadUpTo(opened.stream, maxBufferBytes);
+    if (token !== runToken) {
+      if (result.kind === "oversize") await result.rest.cancel().catch(() => undefined);
+      return;
+    }
+    loaded = result;
+
+    const head =
+      result.kind === "complete"
+        ? result.bytes
+        : (result.prefix[0] ?? new Uint8Array());
+    const contentType = sniffContentType(head);
+    const file = filenameFor(request.fileUrl, opened.meta.contentDisposition);
+
+    const review = buildReview({
+      fileUrl: request.fileUrl,
+      urlWarning: checked.warning,
+      contentType,
+      filename: file,
+      loaded: result,
+      meta: opened.meta,
+      saveOnly: request.saveOnly,
+    });
+
+    setState({ phase: "review", review });
+  } catch (error) {
+    if (token !== runToken) return;
+    release();
+    if (isAbort(error)) {
+      setState({ phase: "idle", warning: lastWarning });
+      return;
+    }
+    setState({
+      phase: "idle",
+      error: asAppError(error, { kind: "network" }),
+      warning: lastWarning,
+    });
+  }
+}
+
+function cancel(): void {
+  runToken += 1;
+  release();
+  setState({ phase: "idle", warning: lastWarning });
+}
+
+function view(): void {
+  if (state.phase !== "review") return;
+  if (loaded?.kind !== "complete") return;
+  if (!state.review.actions.includes("view")) return;
+  setState({ phase: "viewing", review: state.review, scripts: false });
+}
+
+function toggleScripts(): void {
+  if (state.phase !== "viewing") return;
+  setState({ ...state, scripts: !state.scripts });
+}
+
+function closeViewer(): void {
+  release();
+  setState({ phase: "idle", warning: lastWarning });
+}
+
+function backToStart(): void {
+  release();
+  setState({ phase: "idle", warning: lastWarning });
+}
+
+function save(): void {
+  if (state.phase !== "review") return;
+
+  const review = state.review;
+  const current = loaded;
+  if (!current) return;
+
+  const saver = pickSaver(review);
+  if (!saver) {
     clearError();
-    setFormState("loading");
-
-    // Run decryption asynchronously
-    handleFragmentDecrypt(fragmentRequest);
-  } else {
-    // No complete fragment: show form for manual entry/prefill
-    showForm();
-    prefillForm(fragmentParams);
+    showErrorMessage(
+      `This file is larger than ${formatBytes(maxBufferBytes)} and this browser cannot stream it to disk. Use a Chromium-based browser to save large files.`
+    );
+    return;
   }
+
+  // The picker must be opened synchronously from this click handler, so start
+  // the save before rendering the "saving" state.
+  const stream =
+    current.kind === "complete"
+      ? bytesToStream(current.bytes)
+      : joinStream(current.prefix, current.rest);
+  const promise = saver.save(stream, review.filename);
+  setState({ phase: "saving", review });
+
+  promise
+    .then(() => {
+      if (state.phase !== "saving") return;
+      loaded = null;
+      controller = null;
+      setState({ phase: "saved", review });
+    })
+    .catch((error: unknown) => {
+      if (state.phase !== "saving") return;
+      release();
+      if (isAbort(error)) {
+        setState({ phase: "review", review });
+        return;
+      }
+      setState({
+        phase: "idle",
+        error: asAppError(error, { kind: "interrupted" }),
+        warning: lastWarning,
+      });
+    });
 }
 
-/**
- * Handle auto-decryption from fragment parameters
- */
-async function handleFragmentDecrypt(req: DecryptRequest): Promise<void> {
-  try {
-    // Core decryption pipeline
-    const bytes = await fetchAndDecrypt(req.fileUrl, req.passphrase);
+const handlers: UiHandlers = {
+  onCancel: cancel,
+  onView: view,
+  onSave: save,
+  onBack: backToStart,
+  onToggleScripts: toggleScripts,
+  onCloseViewer: closeViewer,
+};
 
-    // Detect content type and extract filename
-    const contentType = detectContentType(bytes);
-    const filename = extractFilename(req.fileUrl);
+function main(): void {
+  bindForm({ onSubmit: (request) => void run(request) });
 
-    const result: DecryptResult = {
-      bytes,
-      contentType,
-      filename,
-    };
-
-    // Success: render result
-    setFormState("idle");
-    renderResult(result, req.forceDownload);
-  } catch (error) {
-    // On error, show the error and re-display the form for manual retry
-    const appError = error as import("./core/types.ts").AppError;
-    setFormState("idle");
-    showError(appError);
-    showForm();
-    prefillForm(req);
-  }
+  // The fragment is a prefill convenience only; never auto-start, and always
+  // strip it from the address bar immediately after reading it.
+  const params = parseFragment(window.location.hash);
+  history.replaceState(null, "", window.location.pathname + window.location.search);
+  prefillForm(params);
+  setState({ phase: "idle", prefill: params });
 }
 
-/**
- * Handle decrypt button click
- */
-async function handleDecrypt(req: DecryptRequest): Promise<void> {
-  // Clear previous results and errors
-  clearStatusArea();
-  clearError();
-
-  // Transition to loading state
-  setFormState("loading");
-
-  try {
-    // Core decryption pipeline
-    const bytes = await fetchAndDecrypt(req.fileUrl, req.passphrase);
-
-    // Detect content type and extract filename
-    const contentType = detectContentType(bytes);
-    const filename = extractFilename(req.fileUrl);
-
-    const result: DecryptResult = {
-      bytes,
-      contentType,
-      filename,
-    };
-
-    // Transition to success state
-    setFormState("idle");
-    renderResult(result, req.forceDownload);
-  } catch (error) {
-    // All errors from fetchAndDecrypt are AppError
-    const appError = error as import("./core/types.ts").AppError;
-
-    // Transition to error state
-    setFormState("idle");
-    showError(appError);
-  }
-}
-
-/**
- * Handle reset (return to idle state)
- */
-function handleReset(): void {
-  setFormState("idle");
-  clearStatusArea();
-  clearError();
-}
-
-// Initialize on DOM ready
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", main);
 } else {

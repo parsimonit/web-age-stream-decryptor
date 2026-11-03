@@ -3,12 +3,27 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="referrer" content="no-referrer" />
+    <!--
+      script-src needs 'unsafe-inline' for the opt-in "Run scripts" viewer:
+      blob: documents inherit this policy, so a stricter value would block the
+      decrypted page's own inline scripts. The app itself never injects
+      decrypted or user data as HTML; it only runs inside the sandboxed iframe.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src https: http:; frame-src blob:; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
     <title>Age Browser Decryptor</title>
     <style>
       * {
         box-sizing: border-box;
         margin: 0;
         padding: 0;
+      }
+
+      [hidden] {
+        display: none !important;
       }
 
       body {
@@ -28,14 +43,33 @@
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
       }
 
-      h1 {
+      .app-header {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
         margin-bottom: 1.5rem;
+      }
+
+      .logo {
+        width: 2.25rem;
+        height: 2.25rem;
+        flex: 0 0 auto;
+        color: #3498db;
+      }
+
+      h1 {
         font-size: 1.8rem;
         color: #2c3e50;
       }
 
+      h2 {
+        font-size: 1.25rem;
+        color: #2c3e50;
+        margin-bottom: 1rem;
+      }
+
       form {
-        margin-bottom: 2rem;
+        margin-bottom: 0;
       }
 
       .form-group {
@@ -49,6 +83,13 @@
         color: #555;
       }
 
+      .checkbox-label {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-weight: 500;
+      }
+
       input[type="text"],
       input[type="password"] {
         width: 100%;
@@ -58,10 +99,11 @@
         font-size: 1rem;
       }
 
-      input:focus {
+      input:focus,
+      button:focus-visible {
         outline: none;
         border-color: #3498db;
-        box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
+        box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.25);
       }
 
       button {
@@ -76,20 +118,6 @@
         transition: background 0.2s;
       }
 
-      .button-row {
-        display: flex;
-        gap: 0.75rem;
-        flex-wrap: wrap;
-      }
-
-      #copy-link-button {
-        background: #7f8c8d;
-      }
-
-      #copy-link-button:hover:not(:disabled) {
-        background: #6b7778;
-      }
-
       button:hover:not(:disabled) {
         background: #2980b9;
       }
@@ -99,24 +127,78 @@
         cursor: not-allowed;
       }
 
-      button.loading {
-        position: relative;
-        color: transparent;
+      .button-secondary {
+        background: #7f8c8d;
       }
 
-      button.loading::after {
-        content: "";
-        position: absolute;
+      .button-secondary:hover:not(:disabled) {
+        background: #6b7778;
+      }
+
+      .button-danger {
+        background: #c0392b;
+      }
+
+      .button-danger:hover:not(:disabled) {
+        background: #a93226;
+      }
+
+      .button-row {
+        display: flex;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+
+      #error-banner {
+        background: #e74c3c;
+        color: white;
+        padding: 1rem;
+        border-radius: 4px;
+        margin-bottom: 1.5rem;
+      }
+
+      #form-warning {
+        background: #fef5e7;
+        border: 1px solid #f5cba7;
+        color: #7e5109;
+        padding: 0.75rem;
+        border-radius: 4px;
+        margin-bottom: 1.25rem;
+      }
+
+      #status-area {
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        background: #fafafa;
+        padding: 1.25rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        flex-wrap: wrap;
+      }
+
+      .status-text {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        color: #555;
+      }
+
+      .status-text.success {
+        color: #1e8449;
+        font-weight: 600;
+      }
+
+      .spinner {
         width: 16px;
         height: 16px;
-        top: 50%;
-        left: 50%;
-        margin-left: -8px;
-        margin-top: -8px;
-        border: 2px solid white;
-        border-radius: 50%;
+        border: 2px solid #3498db;
         border-top-color: transparent;
+        border-radius: 50%;
         animation: spin 0.6s linear infinite;
+        flex: 0 0 auto;
       }
 
       @keyframes spin {
@@ -125,35 +207,112 @@
         }
       }
 
-      #error-banner {
-        display: none;
-        background: #e74c3c;
-        color: white;
-        padding: 1rem;
+      .review-details {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: 0.5rem 1rem;
+        margin-bottom: 1.25rem;
+      }
+
+      .review-details dt {
+        font-weight: 600;
+        color: #555;
+      }
+
+      .review-details dd {
+        overflow-wrap: anywhere;
+      }
+
+      .review-warnings {
+        list-style: none;
+        margin-bottom: 1.25rem;
+      }
+
+      .review-warnings li {
+        background: #fef5e7;
+        border-left: 4px solid #e67e22;
+        color: #7e5109;
+        padding: 0.75rem;
         border-radius: 4px;
-        margin-bottom: 1.5rem;
+        margin-bottom: 0.5rem;
       }
 
-      #error-banner.show {
-        display: block;
+      .review-note,
+      .viewer-note {
+        background: #fef5e7;
+        border: 1px solid #f5cba7;
+        color: #7e5109;
+        padding: 0.75rem;
+        border-radius: 4px;
+        margin-bottom: 1.25rem;
       }
 
-      #status-area {
+      .viewer-note.danger {
+        background: #fdecea;
+        border-color: #e6b0aa;
+        color: #922b21;
+      }
+
+      .review-actions {
+        margin-top: 1.25rem;
+      }
+
+      .viewer-toolbar {
+        margin-bottom: 1rem;
+      }
+
+      .viewer-frame {
+        width: 100%;
+        height: 70vh;
         border: 1px solid #ddd;
         border-radius: 4px;
-        background: #fafafa;
+        background: white;
       }
 
-      .hidden {
-        display: none;
+      @media (max-width: 600px) {
+        body {
+          padding: 1rem;
+        }
+
+        .container {
+          padding: 1.25rem;
+        }
+
+        .review-details {
+          grid-template-columns: 1fr;
+          gap: 0.25rem;
+        }
       }
     </style>
   </head>
   <body>
-    <div class="container">
-      <h1>Age Browser Decryptor</h1>
+    <main class="container">
+      <header class="app-header">
+        <svg
+          class="logo"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <rect x="4" y="10" width="16" height="11" rx="2" />
+          <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+          <circle cx="12" cy="15.5" r="1.25" />
+          <path d="M12 16.75V18" />
+        </svg>
+        <h1>Age Browser Decryptor</h1>
+      </header>
 
-      <div id="error-banner"></div>
+      <div
+        id="error-banner"
+        role="alert"
+        aria-live="assertive"
+        data-testid="error-banner"
+        hidden
+      ></div>
 
       <form id="decrypt-form">
         <div class="form-group">
@@ -163,7 +322,9 @@
             id="file-url"
             name="fileUrl"
             placeholder="https://example.com/file.age"
+            autocomplete="off"
             required
+            data-testid="file-url"
           />
         </div>
 
@@ -174,25 +335,49 @@
             id="passphrase"
             name="passphrase"
             placeholder="Enter passphrase"
+            autocomplete="off"
             required
+            data-testid="passphrase"
           />
         </div>
 
         <div class="form-group">
-          <label>
-            <input type="checkbox" id="force-download" name="forceDownload" />
-            Force download
+          <label class="checkbox-label" for="save-only">
+            <input
+              type="checkbox"
+              id="save-only"
+              name="saveOnly"
+              data-testid="save-only"
+            />
+            Save only (never render in the browser)
           </label>
         </div>
 
+        <div id="form-warning" data-testid="form-warning" hidden></div>
+
         <div class="button-row">
-          <button type="submit" id="decrypt-button">Decrypt</button>
-          <button type="button" id="copy-link-button">Copy Link</button>
+          <button type="submit" id="decrypt-button" data-testid="decrypt-button">
+            Decrypt
+          </button>
         </div>
       </form>
 
-      <div id="status-area"></div>
-    </div>
+      <div id="status-area" aria-live="polite" data-testid="status-area" hidden></div>
+
+      <section
+        id="review-panel"
+        aria-labelledby="review-heading"
+        data-testid="review-panel"
+        hidden
+      ></section>
+
+      <section
+        id="viewer-panel"
+        aria-labelledby="viewer-heading"
+        data-testid="viewer-panel"
+        hidden
+      ></section>
+    </main>
 
     <script type="module" src="/src/main.ts"></script>
   </body>
