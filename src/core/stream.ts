@@ -2,7 +2,15 @@ import { Decrypter } from "age-encryption";
 import { isAbortError } from "./errors.ts";
 import type { AppError, OpenedStream, StreamMeta } from "./types.ts";
 
-/** Upper bound on ciphertext read before the age header resolves. */
+/**
+ * Caps how much ciphertext may be forwarded before the age header resolves, so
+ * a body that never yields a header line fails as a format error instead of
+ * growing memory. Memory stays bounded by the cap plus one chunk: a chunk that
+ * starts below the cap is forwarded whole, because the header line can end
+ * inside it and a fast server (or a stubbed Response) may coalesce the body
+ * into one large read. Rejecting such a chunk would misreport a valid file as
+ * a format error.
+ */
 const HEADER_LIMIT_BYTES = 4 * 1024 * 1024;
 
 /**
@@ -76,8 +84,11 @@ function boundHeader(body: ReadableStream<Uint8Array>): {
             controller.close();
             return;
           }
+          const before = total;
           total += value.byteLength;
-          if (limiting && total > HEADER_LIMIT_BYTES) {
+          // Only reject once the cap was already exceeded by earlier chunks;
+          // the header may finish inside this one, however large it is.
+          if (limiting && before > HEADER_LIMIT_BYTES) {
             await reader.cancel("age header too large").catch(() => undefined);
             controller.error({ kind: "format" } as AppError);
             return;

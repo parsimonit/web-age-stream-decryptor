@@ -476,6 +476,67 @@ export const scenarios = [
     },
   },
   {
+    name: "i2) chunked transfer (no Content-Length), 3 MiB under cap: exact bytes",
+    async run({ driver, server, app, expected }) {
+      // Guards against network-fragmentation bugs: the fixture server sends this
+      // payload with Transfer-Encoding: chunked in uneven 1..20000-byte writes.
+      const path = "/chunked-small.age";
+      await driver.open(app);
+      await fillAndSubmit(driver, server.url(path));
+      await waitForReview(driver, 120_000);
+
+      assertEqual(await driver.text("review-size"), "3.0 MiB", "review size");
+      assert(!(await driver.exists("review-oversize")), "not oversize");
+
+      await installSaverStub(driver);
+      await driver.click("save-button");
+      await waitForSaved(driver, 120_000);
+
+      const info = await opfsFileInfo(driver, "chunked-small");
+      assert(info !== null, "saved file should exist");
+      assertEqual(info.size, expected.chunkedSmallSize, "saved size");
+      assertEqual(info.sha256, expected.chunkedSmallSha256, "saved SHA-256");
+      assertEqual(
+        requestCount(server.stats(), path),
+        1,
+        "one request for the whole run"
+      );
+    },
+  },
+  {
+    name: "i3) chunked transfer (no Content-Length), 12 MiB over cap: streams exact bytes",
+    async run({ driver, server, app, expected }) {
+      // Same fragmentation guard, but on the over-cap path: the app must decrypt
+      // across arbitrary network chunk boundaries while streaming to disk.
+      const path = "/chunked-large.age";
+      await driver.open(app);
+      await fillAndSubmit(driver, server.url(path));
+      await waitForReview(driver, 180_000);
+
+      assert(await driver.exists("review-oversize"), "oversize note");
+      assert(!(await driver.exists("view-button")), "View disabled");
+      assertEqual(
+        await driver.text("review-size"),
+        "Unknown",
+        "size unknown without Content-Length"
+      );
+
+      await installSaverStub(driver);
+      await driver.click("save-button");
+      await waitForSaved(driver, 180_000);
+
+      const info = await opfsFileInfo(driver, "chunked-large");
+      assert(info !== null, "streamed file should exist");
+      assertEqual(info.size, expected.chunkedOverSize, "streamed size");
+      assertEqual(info.sha256, expected.chunkedOverSha256, "streamed SHA-256");
+      assertEqual(
+        requestCount(server.stats(), path),
+        1,
+        "one request for the whole stream"
+      );
+    },
+  },
+  {
     name: "j) /varies.age: exactly one request for the whole run",
     async run({ driver, server, app, expected }) {
       const path = "/varies.age";

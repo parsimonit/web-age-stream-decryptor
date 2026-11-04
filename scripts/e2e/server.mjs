@@ -27,6 +27,17 @@ const LARGE_DROP_AFTER = 11 * 1024 * 1024;
 const CHUNK_BYTES = 64 * 1024;
 const WRITE_DELAY_MS = 4;
 
+/**
+ * Payloads served with chunked transfer encoding (no Content-Length). The in-memory
+ * one stays under the 10 MiB cap; the over-cap one exercises the streaming save path.
+ * Both are written in small, seeded, uneven pieces so the browser sees the same
+ * fragmented reads a real network produces.
+ */
+const CHUNKED_IN_MEMORY_BYTES = 3 * 1024 * 1024;
+const CHUNKED_OVER_CAP_BYTES = 12 * 1024 * 1024;
+const CHUNKED_MAX_WRITE_BYTES = 20_000;
+const CHUNKED_SEED = 0x51ee7;
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -52,6 +63,15 @@ function patternBytes(length, seed = 0x12345678) {
     bytes[i] = (x >>> 16) & 0xff;
   }
   return bytes;
+}
+
+/** Deterministic 0 <= n < 1 stream, so fragmentation is reproducible run to run. */
+function seededRandom(seed) {
+  let x = seed >>> 0;
+  return () => {
+    x = (Math.imul(1664525, x) + 1013904223) >>> 0;
+    return x / 0x100000000;
+  };
 }
 
 const HTML_WITH_SCRIPT = `<!doctype html>
@@ -109,6 +129,12 @@ async function buildPayloads() {
 
   const htmlScript = await encryptBytes(HTML_WITH_SCRIPT);
 
+  const chunkedSmallPlain = patternBytes(CHUNKED_IN_MEMORY_BYTES, 0x0c4a11ed);
+  const chunkedSmall = await encryptBytes(chunkedSmallPlain);
+  const chunkedOverPlain = patternBytes(CHUNKED_OVER_CAP_BYTES, 0x0c4a12ed);
+  // Built on first request: the 12 MiB ciphertext is only needed by one scenario.
+  const chunkedOver = lazy(() => encryptBytes(chunkedOverPlain));
+
   const variantTexts = ["variant-0", "variant-1", "variant-2"].map(
     (text) => `${text} payload: single-request guarantee\n`
   );
@@ -125,6 +151,10 @@ async function buildPayloads() {
     htmlScript,
     variants,
     variantSize: Buffer.byteLength(variantTexts[0]),
+    chunkedSmall,
+    chunkedSmallPlain,
+    chunkedOver,
+    chunkedOverPlain,
     pdf: readFileSync(join(FIXTURES, "doc.pdf.age")),
     fixtures: new Map(),
   };
@@ -207,6 +237,46 @@ async function streamSlow(res, entry, bytes) {
     }
     if (res.destroyed) return;
     await delay(WRITE_DELAY_MS);
+  }
+  if (!res.destroyed) res.end();
+}
+
+/**
+ * Serves `bytes` with chunked transfer encoding: no Content-Length, uneven writes,
+ * and a real event-loop yield between them. This reproduces network fragmentation
+ * (odd-sized reads, header/nonce/tag boundaries split across chunks) that a
+ * single-buffer or 64 KiB-aligned body never exercises.
+ */
+async function streamChunked(res, entry, bytes) {
+  res.writeHead(200, {
+    "Content-Type": "application/octet-stream",
+    "Cache-Control": "no-store",
+    // Deliberately no Content-Length: Node then uses Transfer-Encoding: chunked.
+    ...CORS_HEADERS,
+  });
+  entry.bytesTotal = bytes.length;
+
+  const random = seededRandom(CHUNKED_SEED);
+  let writes = 0;
+  for (let offset = 0; offset < bytes.length;) {
+    if (res.destroyed) return;
+    const size = Math.min(
+      1 + Math.floor(random() * CHUNKED_MAX_WRITE_BYTES),
+      bytes.length - offset
+    );
+    const chunk = bytes.subarray(offset, offset + size);
+    offset += size;
+    entry.bytesFlushed += chunk.length;
+    try {
+      if (!res.write(chunk)) await once(res, "drain");
+    } catch {
+      return;
+    }
+    if (res.destroyed) return;
+    // Let the socket flush this write as its own HTTP chunk before the next one.
+    await delay(0);
+    writes += 1;
+    if (writes % 32 === 0) await delay(1);
   }
   if (!res.destroyed) res.end();
 }
@@ -320,6 +390,17 @@ async function handle(req, res, payloads, stats, state) {
     return;
   }
 
+  if (pathname === "/chunked-small.age") {
+    await streamChunked(res, entry, payloads.chunkedSmall);
+    return;
+  }
+
+  if (pathname === "/chunked-large.age") {
+    const bytes = await payloads.chunkedOver();
+    await streamChunked(res, entry, bytes);
+    return;
+  }
+
   if (pathname === "/html-script.age") {
     sendBytes(req, res, entry, payloads.htmlScript);
     return;
@@ -396,6 +477,14 @@ export async function startFixtureServer() {
       bigCipherSize: payloads.big.length,
       variantSize: payloads.variantSize,
       largeSize: LARGE_PLAINTEXT_BYTES,
+      chunkedSmallSize: payloads.chunkedSmallPlain.length,
+      chunkedSmallSha256: createHash("sha256")
+        .update(payloads.chunkedSmallPlain)
+        .digest("hex"),
+      chunkedOverSize: payloads.chunkedOverPlain.length,
+      chunkedOverSha256: createHash("sha256")
+        .update(payloads.chunkedOverPlain)
+        .digest("hex"),
     },
     async close() {
       server.closeAllConnections();

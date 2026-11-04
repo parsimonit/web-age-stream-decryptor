@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openDecryptedStream } from "../src/core/stream.ts";
-import { encrypt, PASSPHRASE, readAll, stubFetchBytes } from "./helpers.ts";
+import { loadUpTo } from "../src/core/buffer.ts";
+import {
+  encrypt,
+  PASSPHRASE,
+  readAll,
+  rechunkedStream,
+  seededChunkSizes,
+  stubFetchBytes,
+} from "./helpers.ts";
 
 const FILE_URL = "https://example.com/file.age";
 
@@ -84,6 +92,132 @@ describe("openDecryptedStream — success", () => {
     const opened = await openDecryptedStream(FILE_URL, PASSPHRASE);
     await expect(opened.stream.cancel("stop")).resolves.toBeUndefined();
   });
+});
+
+describe("openDecryptedStream — network fragmentation", () => {
+  /**
+   * Real network bodies arrive in arbitrary, unaligned chunks: a few KiB, odd
+   * sizes, and boundaries that split the age header line, the 16-byte payload
+   * nonce, the 64 KiB ciphertext chunks and their 16-byte tags. Earlier tests
+   * fed Blob-sized or whole-buffer chunks, so they never crossed those
+   * boundaries. These cases guard against network-fragmentation bugs.
+   */
+  const FIXED = [1, 7, 16, 100, 1024, 4096, 16384, 65535, 65536, 65537];
+  const RANDOM_SMALL = "seeded random 1–300-byte chunks";
+  const RANDOM_MIX = "seeded random 1–20000-byte chunks";
+
+  const chunkers = new Map<string, () => () => number>();
+  for (const size of FIXED) {
+    chunkers.set(`${size}-byte chunks`, () => () => size);
+  }
+  chunkers.set(RANDOM_SMALL, () => seededChunkSizes(0x5eed, 300));
+  chunkers.set(RANDOM_MIX, () => seededChunkSizes(0x5eed, 20_000));
+
+  const fixedLabels = (sizes: number[]) => sizes.map((size) => `${size}-byte chunks`);
+
+  const matrix: { size: number; labels: string[] }[] = [
+    { size: 0, labels: fixedLabels([1, 65536]) },
+    { size: 1, labels: fixedLabels([1, 7, 16]) },
+    { size: 100, labels: fixedLabels([1, 7, 16, 100]) },
+    {
+      size: 65536, // exactly one age chunk: its tag sits at the boundary
+      labels: fixedLabels([7, 100, 1024, 4096, 16384, 65535, 65536, 65537]).concat(
+        RANDOM_MIX
+      ),
+    },
+    {
+      size: 65537, // one full chunk plus a one-byte tail
+      labels: fixedLabels([7, 100, 1024, 4096, 16384, 65535, 65536, 65537]).concat(
+        RANDOM_MIX
+      ),
+    },
+    {
+      size: 131072,
+      labels: fixedLabels([100, 1024, 4096, 16384, 65535, 65536, 65537]).concat(
+        RANDOM_SMALL,
+        RANDOM_MIX
+      ),
+    },
+    {
+      size: 1024 * 1024,
+      labels: fixedLabels([4096, 16384, 65536, 65537]).concat(RANDOM_MIX),
+    },
+  ];
+
+  const plaintexts = new Map<number, Uint8Array>();
+  const ciphertexts = new Map<number, Uint8Array>();
+  function plaintextFor(size: number): Uint8Array {
+    let bytes = plaintexts.get(size);
+    if (!bytes) {
+      bytes = new Uint8Array(size);
+      for (let i = 0; i < size; i++) bytes[i] = i % 251;
+      plaintexts.set(size, bytes);
+    }
+    return bytes;
+  }
+  async function ciphertextFor(size: number): Promise<Uint8Array> {
+    let bytes = ciphertexts.get(size);
+    if (!bytes) {
+      bytes = await encrypt(plaintextFor(size));
+      ciphertexts.set(size, bytes);
+    }
+    return bytes;
+  }
+
+  const cases = matrix.flatMap(({ size, labels }) =>
+    labels.map((label) => {
+      const make = chunkers.get(label);
+      if (!make) throw new Error(`unknown chunking ${label}`);
+      return { size, label: `${size} plaintext bytes in ${label}`, make };
+    })
+  );
+
+  /** Element-wise compare: deep-equality on multi-MiB arrays is very slow. */
+  function sameBytes(actual: Uint8Array, expected: Uint8Array): boolean {
+    if (actual.length !== expected.length) return false;
+    for (let i = 0; i < actual.length; i++) {
+      if (actual[i] !== expected[i]) return false;
+    }
+    return true;
+  }
+
+  it.each(cases)("decrypts $label byte-exactly", async ({ size, make }) => {
+    const plaintext = plaintextFor(size);
+    const ciphertext = await ciphertextFor(size);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () => new Response(rechunkedStream(ciphertext, make()), { status: 200 })
+      )
+    );
+
+    const opened = await openDecryptedStream(FILE_URL, PASSPHRASE);
+    const loaded = await loadUpTo(opened.stream, plaintext.length);
+
+    expect(loaded.kind).toBe("complete");
+    if (loaded.kind === "complete") {
+      expect(loaded.bytes.length).toBe(plaintext.length);
+      expect(sameBytes(loaded.bytes, plaintext)).toBe(true);
+    }
+  });
+
+  it("decrypts a valid body delivered as one chunk above the header cap", async () => {
+    // A fast server, or a Response built from a whole buffer, can hand over the
+    // file in a single read. The header sits inside it, so it must not be
+    // rejected as an over-long header.
+    const plaintext = plaintextFor(5 * 1024 * 1024);
+    stubFetchBytes(await ciphertextFor(5 * 1024 * 1024));
+
+    const opened = await openDecryptedStream(FILE_URL, PASSPHRASE);
+    const loaded = await loadUpTo(opened.stream, plaintext.length);
+
+    expect(loaded.kind).toBe("complete");
+    if (loaded.kind === "complete") {
+      expect(loaded.bytes.length).toBe(plaintext.length);
+      expect(sameBytes(loaded.bytes, plaintext)).toBe(true);
+    }
+  }, 30_000);
 });
 
 describe("openDecryptedStream — fetch errors", () => {
