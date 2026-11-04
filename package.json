@@ -13,7 +13,7 @@
     "url": "https://github.com/parsimonit/web-age-stream-decryptor/issues"
   },
   "engines": {
-    "node": ">=20",
+    "node": ">=26",
     "npm": ">=10"
   },
   "type": "module",
@@ -22,7 +22,17 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "lint": "eslint src test"
+    "test:cov": "vitest run --coverage --exclude test/interop.test.ts",
+    "lint": "eslint src test scripts public",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "audit:prod": "npm audit --omit=dev --audit-level=high",
+    "check:node": "node scripts/check-node-version.mjs",
+    "gate": "npm run check:node && npm run lint && npm run typecheck && npm run format:check && npm run test:cov && npm run test:interop && npm run build && npm run audit:prod",
+    "test:interop": "vitest run test/interop.test.ts",
+    "e2e": "node scripts/e2e/run.mjs",
+    "verify": "npm run gate && npm run e2e"
   },
   "dependencies": {
     "age-encryption": "0.3.0"
@@ -31,6 +41,8 @@
     "@eslint/js": "^10.0.1",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
+    "@vitest/coverage-v8": "^4.1.12",
+    "agent-browser": "0.41.1",
     "eslint": "^10.7.0",
     "prettier": "^3.0.0",
     "typescript": "^5.9.0",

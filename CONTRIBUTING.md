@@ -17,9 +17,9 @@ Thanks for contributing.
 
 ## Validation before PR
 
-1. npm run lint
-2. npm test
-3. npm run build
+1. `npm run verify` (or `devbox run -- npm run verify` inside devbox) = `npm run gate && npm run e2e`
+2. `npm run gate` runs `check:node`, `lint`, `typecheck`, `format:check`, `test:cov`, `build`, `audit:prod`
+3. `npm run e2e` is the local browser gate (CI-equivalent via `npm run e2e`); its first run needs `npx agent-browser install` if Chrome is missing
 
 ## Pull request guidance
 

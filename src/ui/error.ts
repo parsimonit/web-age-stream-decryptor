@@ -1,40 +1,42 @@
 import type { AppError } from "../core/types.ts";
 
-/**
- * Displays a human-readable error banner for the given AppError.
- */
-export function showError(error: AppError): void {
-  const banner = document.getElementById("error-banner")!;
-  let message: string;
-
+/** Human-readable copy for every failure the app can surface. */
+export function errorMessage(error: AppError): string {
   switch (error.kind) {
     case "network":
-      message = "Network error while fetching the file.";
-      break;
+      return "Network error while fetching the file. The server may be unreachable or may not allow cross-origin requests (CORS).";
     case "fetch":
-      message = `HTTP error while fetching the file (HTTP ${error.status}).`;
-      break;
-    case "cors":
-      message =
-        "Cannot fetch this URL: CORS policy blocked the request. Ensure the server sends CORS headers, or self-host the encrypted file on the same origin.";
-      break;
-    case "decrypt":
-      message = "Decryption failed: incorrect passphrase or corrupted file.";
-      break;
+      return `The server returned HTTP ${error.status} instead of the file.`;
+    case "mixed-content":
+      return "This page is served over HTTPS and cannot fetch plain http:// URLs.";
     case "format":
-      message = "File does not appear to be a valid age-encrypted file.";
-      break;
+      return "This file is not a valid age-encrypted file.";
+    case "decrypt":
+      return "Decryption failed: the passphrase is wrong, or the file is corrupted or tampered with.";
+    case "interrupted":
+      return "The connection was interrupted while downloading the file.";
   }
-
-  banner.textContent = message;
-  banner.classList.add("show");
 }
 
-/**
- * Hides the error banner.
- */
+export function errorElement(): HTMLElement | null {
+  return document.getElementById("error-banner");
+}
+
+/** Shows a message in the live error banner. */
+export function showErrorMessage(message: string): void {
+  const banner = errorElement();
+  if (!banner) return;
+  banner.textContent = message;
+  banner.hidden = false;
+}
+
+export function showError(error: AppError): void {
+  showErrorMessage(errorMessage(error));
+}
+
 export function clearError(): void {
-  const banner = document.getElementById("error-banner")!;
+  const banner = errorElement();
+  if (!banner) return;
   banner.textContent = "";
-  banner.classList.remove("show");
+  banner.hidden = true;
 }

@@ -1,81 +1,59 @@
 import type { ContentType } from "./types.ts";
 
+const PDF: ContentType = { kind: "pdf", mimeType: "application/pdf" };
+const HTML: ContentType = { kind: "html", mimeType: "text/html" };
+const SVG: ContentType = { kind: "svg", mimeType: "image/svg+xml" };
+const BINARY: ContentType = { kind: "binary", mimeType: "application/octet-stream" };
+
+const SNIFF_WINDOW = 512;
+const HTML_MARKERS = ["<!doctype html", "<html", "<head", "<body", "<!--"];
+const ASCII_WHITESPACE = new Set([0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20]);
+
 /**
- * Inspects the leading bytes of a decrypted payload and returns the content type.
- *
- * Detection is magic-byte based (first 8 bytes):
- *   - `%PDF`          → { kind: "pdf",    mimeType: "application/pdf" }
- *   - `<!` / `<html`  → { kind: "html",   mimeType: "text/html" }
- *   - anything else   → { kind: "binary", mimeType: "application/octet-stream" }
- *
- * @param bytes - First bytes of the decrypted plaintext (minimum 8 bytes recommended;
- *                works on shorter arrays with degraded detection for small files).
- * @returns     ContentType discriminated union.
+ * Classifies the first bytes of a decrypted payload. HTML/SVG/PDF are the only
+ * formats the review step may offer to view; everything else is binary.
  */
-export function detectContentType(bytes: Uint8Array): ContentType {
-  // Check for PDF signature: %PDF (hex: 25 50 44 46)
-  if (
+export function sniffContentType(head: Uint8Array): ContentType {
+  // PDF signatures must sit exactly at offset 0 (leading whitespace is not valid).
+  if (isPdf(head)) return PDF;
+
+  const start = skipPreamble(head);
+  const preview = asciiLower(head.subarray(start, start + SNIFF_WINDOW));
+
+  if (HTML_MARKERS.some((marker) => preview.includes(marker))) return HTML;
+  if (preview.includes("<?xml")) {
+    return preview.includes("<svg") ? SVG : BINARY;
+  }
+  if (preview.includes("<svg")) return SVG;
+  return BINARY;
+}
+
+function isPdf(bytes: Uint8Array): boolean {
+  return (
     bytes.length >= 4 &&
     bytes[0] === 0x25 &&
     bytes[1] === 0x50 &&
     bytes[2] === 0x44 &&
     bytes[3] === 0x46
-  ) {
-    return { kind: "pdf", mimeType: "application/pdf" };
-  }
-
-  // Check for HTML signatures: <! or <html or <HTML
-  if (bytes.length >= 2 && bytes[0] === 0x3c && bytes[1] === 0x21) {
-    // <! (likely <!DOCTYPE or <!--)
-    return { kind: "html", mimeType: "text/html" };
-  }
-
-  if (bytes.length >= 5) {
-    const text = new TextDecoder().decode(bytes.slice(0, 5)).toLowerCase();
-    if (text === "<html") {
-      return { kind: "html", mimeType: "text/html" };
-    }
-  }
-
-  // Default: binary
-  return { kind: "binary", mimeType: "application/octet-stream" };
+  );
 }
 
-/**
- * Derives a suggested download filename from the encrypted file URL.
- *
- * Takes the last path segment of the URL, strips query string and fragment,
- * then strips a trailing `.age` extension if present. Falls back to "download"
- * if the URL has no path segment.
- *
- * @param fileUrl - The URL that was used to fetch the encrypted file.
- * @returns       A filename string suitable for use in an `<a download>` attribute.
- *
- * @example
- *   extractFilename("https://example.com/report.pdf.age") // → "report.pdf"
- *   extractFilename("https://example.com/data.zip")       // → "data.zip"
- *   extractFilename("https://example.com/")               // → "download"
- *   extractFilename("https://example.com/file.age?v=1")   // → "file"
- */
-export function extractFilename(fileUrl: string): string {
-  try {
-    const url = new URL(fileUrl);
-    const pathname = url.pathname;
-    const segments = pathname.split("/").filter((s) => s.length > 0);
-
-    if (segments.length === 0) {
-      return "download";
-    }
-
-    let filename = segments[segments.length - 1];
-
-    // Strip .age extension if present
-    if (filename.endsWith(".age")) {
-      filename = filename.slice(0, -4);
-    }
-
-    return filename || "download";
-  } catch {
-    return "download";
+/** Skips a UTF-8 BOM followed by any ASCII whitespace. */
+function skipPreamble(bytes: Uint8Array): number {
+  let index = 0;
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    index = 3;
   }
+  while (index < bytes.length && ASCII_WHITESPACE.has(bytes[index])) {
+    index++;
+  }
+  return index;
+}
+
+function asciiLower(bytes: Uint8Array): string {
+  let text = "";
+  for (const byte of bytes) {
+    text += String.fromCharCode(byte >= 0x41 && byte <= 0x5a ? byte + 0x20 : byte);
+  }
+  return text;
 }

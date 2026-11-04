@@ -1,121 +1,290 @@
-import type { DecryptRequest, DecryptResult } from "./core/types.ts";
-import { fetchAndDecrypt } from "./core/decrypt.ts";
-import { detectContentType, extractFilename } from "./core/detect.ts";
-import { parseFragment, toDecryptRequest } from "./core/fragment.ts";
-import { bindForm, setFormState, hideForm, showForm, prefillForm } from "./ui/form.ts";
-import { renderResult, clearStatusArea } from "./ui/renderer.ts";
-import { showError, clearError } from "./ui/error.ts";
+import { resolveMaxBufferBytes } from "./core/config.ts";
+import { bytesToStream, joinStream, loadUpTo } from "./core/buffer.ts";
+import { sniffContentType } from "./core/detect.ts";
+import { isAbortError } from "./core/errors.ts";
+import { filenameFor } from "./core/filename.ts";
+import { parseFragment } from "./core/fragment.ts";
+import { buildReview } from "./core/review.ts";
+import { openDecryptedStream } from "./core/stream.ts";
+import type {
+  AppError,
+  AppState,
+  DecryptRequest,
+  Loaded,
+  ReviewWarning,
+} from "./core/types.ts";
+import { checkUrl } from "./core/url.ts";
+import { clearError, showErrorMessage } from "./ui/error.ts";
+import { bindForm, prefillForm } from "./ui/form.ts";
+import { formatBytes } from "./ui/format.ts";
+import { render, type UiHandlers } from "./ui/render.ts";
+import {
+  parseSaverOverride,
+  pickSaver,
+  SaverUnavailableError,
+} from "./ui/savers/index.ts";
+
+const maxBufferBytes = resolveMaxBufferBytes(import.meta.env.VITE_MAX_BUFFER_BYTES);
 
 /**
- * Main entry point - handles fragment-driven auto-decryption or shows form
+ * Test hook, not product behavior: `?saver=fsa|sw|anchor` forces a download
+ * destination so the service-worker path is exercisable in Chromium. Read from
+ * the query string (never the fragment, which stays secret). See README.
  */
-function main() {
-  bindForm({
-    onSubmit: handleDecrypt,
-    onReset: handleReset,
-  });
+const saverOverride = parseSaverOverride(
+  new URLSearchParams(window.location.search).get("saver")
+);
 
-  // Parse fragment for auto-decrypt and partial-prefill handling
-  const fragmentParams = parseFragment(window.location.hash);
-  const fragmentRequest = toDecryptRequest(fragmentParams);
+/** Transient resources deliberately kept out of AppState. */
+let state: AppState = { phase: "idle" };
+let loaded: Loaded | null = null;
+let controller: AbortController | null = null;
+let saveController: AbortController | null = null;
+let lastWarning: ReviewWarning | undefined;
+let runToken = 0;
 
-  if (fragmentRequest) {
-    // Auto-decryption: clear passphrase from address bar immediately
-    history.replaceState(null, "", location.pathname + location.search);
+const ERROR_KINDS = new Set([
+  "network",
+  "fetch",
+  "mixed-content",
+  "format",
+  "decrypt",
+  "interrupted",
+]);
 
-    // Hide form and start decryption
-    hideForm();
-    clearError();
-    setFormState("loading");
-
-    // Run decryption asynchronously
-    handleFragmentDecrypt(fragmentRequest);
-  } else {
-    // No complete fragment: show form for manual entry/prefill
-    showForm();
-    prefillForm(fragmentParams);
-  }
+function isAppError(error: unknown): error is AppError {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "kind" in error &&
+    typeof (error as { kind?: unknown }).kind === "string" &&
+    ERROR_KINDS.has((error as { kind: string }).kind)
+  );
 }
 
-/**
- * Handle auto-decryption from fragment parameters
- */
-async function handleFragmentDecrypt(req: DecryptRequest): Promise<void> {
+function asAppError(error: unknown, fallback: AppError): AppError {
+  return isAppError(error) ? error : fallback;
+}
+
+function viewerBytes(): Uint8Array | undefined {
+  return state.phase === "viewing" && loaded?.kind === "complete"
+    ? loaded.bytes
+    : undefined;
+}
+
+function setState(next: AppState): void {
+  state = next;
+  render(state, { cap: maxBufferBytes, viewerBytes: viewerBytes(), handlers });
+}
+
+function release(): void {
+  controller?.abort();
+  controller = null;
+  saveController?.abort();
+  saveController = null;
+  loaded = null;
+}
+
+/** Single execution path: preflight -> fetch/decrypt -> bounded read -> review. */
+async function run(request: DecryptRequest): Promise<void> {
+  runToken += 1;
+  const token = runToken;
+  release();
+
+  const checked = checkUrl(request.fileUrl, window.location.protocol);
+  if (!checked.ok) {
+    setState({ phase: "idle", error: checked.error });
+    return;
+  }
+
+  lastWarning = checked.warning;
+  controller = new AbortController();
+  setState({ phase: "loading", host: checked.host });
+
   try {
-    // Core decryption pipeline
-    const bytes = await fetchAndDecrypt(req.fileUrl, req.passphrase);
+    const opened = await openDecryptedStream(
+      request.fileUrl,
+      request.passphrase,
+      controller.signal
+    );
+    if (token !== runToken) return;
 
-    // Detect content type and extract filename
-    const contentType = detectContentType(bytes);
-    const filename = extractFilename(req.fileUrl);
+    const result = await loadUpTo(opened.stream, maxBufferBytes);
+    if (token !== runToken) {
+      if (result.kind === "oversize") await result.rest.cancel().catch(() => undefined);
+      return;
+    }
+    loaded = result;
 
-    const result: DecryptResult = {
-      bytes,
+    const head =
+      result.kind === "complete"
+        ? result.bytes
+        : (result.prefix[0] ?? new Uint8Array());
+    const contentType = sniffContentType(head);
+    const file = filenameFor(request.fileUrl, opened.meta.contentDisposition);
+
+    const review = buildReview({
+      fileUrl: request.fileUrl,
+      urlWarning: checked.warning,
       contentType,
-      filename,
-    };
+      filename: file,
+      loaded: result,
+      meta: opened.meta,
+      saveOnly: request.saveOnly,
+    });
 
-    // Success: render result
-    setFormState("idle");
-    renderResult(result, req.forceDownload);
+    setState({ phase: "review", review });
   } catch (error) {
-    // On error, show the error and re-display the form for manual retry
-    const appError = error as import("./core/types.ts").AppError;
-    setFormState("idle");
-    showError(appError);
-    showForm();
-    prefillForm(req);
+    if (token !== runToken) return;
+    release();
+    if (isAbortError(error)) {
+      setState({ phase: "idle", warning: lastWarning });
+      return;
+    }
+    setState({
+      phase: "idle",
+      error: asAppError(error, { kind: "network" }),
+      warning: lastWarning,
+    });
   }
 }
 
-/**
- * Handle decrypt button click
- */
-async function handleDecrypt(req: DecryptRequest): Promise<void> {
-  // Clear previous results and errors
-  clearStatusArea();
+function cancel(): void {
+  runToken += 1;
+  release();
+  setState({ phase: "idle", warning: lastWarning });
+}
+
+function view(): void {
+  if (state.phase !== "review") return;
+  if (loaded?.kind !== "complete") return;
+  if (!state.review.actions.includes("view")) return;
+  setState({ phase: "viewing", review: state.review, scripts: false });
+}
+
+function toggleScripts(): void {
+  if (state.phase !== "viewing") return;
+  setState({ ...state, scripts: !state.scripts });
+}
+
+function closeViewer(): void {
+  release();
+  setState({ phase: "idle", warning: lastWarning });
+}
+
+function backToStart(): void {
+  release();
+  setState({ phase: "idle", warning: lastWarning });
+}
+
+function showCannotStream(): void {
   clearError();
+  showErrorMessage(
+    `This file is larger than ${formatBytes(maxBufferBytes)} and this browser cannot stream it to disk. Use a Chromium-based browser to save large files.`
+  );
+}
 
-  // Transition to loading state
-  setFormState("loading");
+function save(): void {
+  if (state.phase !== "review") return;
 
-  try {
-    // Core decryption pipeline
-    const bytes = await fetchAndDecrypt(req.fileUrl, req.passphrase);
+  const review = state.review;
+  const current = loaded;
+  if (!current) return;
 
-    // Detect content type and extract filename
-    const contentType = detectContentType(bytes);
-    const filename = extractFilename(req.fileUrl);
-
-    const result: DecryptResult = {
-      bytes,
-      contentType,
-      filename,
-    };
-
-    // Transition to success state
-    setFormState("idle");
-    renderResult(result, req.forceDownload);
-  } catch (error) {
-    // All errors from fetchAndDecrypt are AppError
-    const appError = error as import("./core/types.ts").AppError;
-
-    // Transition to error state
-    setFormState("idle");
-    showError(appError);
+  const saver = pickSaver(review, saverOverride);
+  if (!saver) {
+    showCannotStream();
+    return;
   }
+
+  // The picker must be opened synchronously from this click handler, so start
+  // the save before rendering the "saving" state. The stream itself is created
+  // only after the saver has a destination, so cancelling the picker leaves the
+  // in-flight response reusable.
+  const source = () =>
+    current.kind === "complete"
+      ? bytesToStream(current.bytes)
+      : joinStream(current.prefix, current.rest);
+  saveController = new AbortController();
+  const promise = saver.save(source, review.filename, saveController.signal);
+  setState({ phase: "saving", review });
+
+  promise
+    .then((outcome) => {
+      if (state.phase !== "saving") return;
+      saveController = null;
+      if (outcome === "cancelled") {
+        setState({ phase: "review", review });
+        return;
+      }
+      loaded = null;
+      controller = null;
+      setState({ phase: "saved", review });
+    })
+    .catch((error: unknown) => {
+      if (state.phase !== "saving") return;
+      saveController = null;
+      if (error instanceof SaverUnavailableError) {
+        // Registration failed before the source was consumed, so keep the
+        // review usable and leave `loaded` alone (like the no-saver path).
+        setState({ phase: "review", review });
+        showCannotStream();
+        return;
+      }
+      if (isAbortError(error)) {
+        // A complete payload can be saved again; an oversize one had its
+        // remaining stream consumed, so start over from the form.
+        if (loaded?.kind === "complete") {
+          setState({ phase: "review", review });
+          return;
+        }
+        release();
+        setState({ phase: "idle", warning: lastWarning });
+        return;
+      }
+      release();
+      setState({
+        phase: "idle",
+        error: asAppError(error, { kind: "interrupted" }),
+        warning: lastWarning,
+      });
+    });
 }
 
-/**
- * Handle reset (return to idle state)
- */
-function handleReset(): void {
-  setFormState("idle");
-  clearStatusArea();
-  clearError();
+function cancelSave(): void {
+  if (state.phase !== "saving") return;
+  saveController?.abort();
 }
 
-// Initialize on DOM ready
+const handlers: UiHandlers = {
+  onCancel: cancel,
+  onCancelSave: cancelSave,
+  onView: view,
+  onSave: save,
+  onBack: backToStart,
+  onToggleScripts: toggleScripts,
+  onCloseViewer: closeViewer,
+};
+
+/** Reads a fragment, always strips it, and prefills the form when idle. */
+function applyFragment(): void {
+  const hash = window.location.hash;
+  const params = parseFragment(hash);
+  history.replaceState(null, "", window.location.pathname + window.location.search);
+  if (state.phase !== "idle" || hash === "") return;
+  prefillForm(params);
+}
+
+function main(): void {
+  bindForm({ onSubmit: (request) => void run(request) });
+
+  // The fragment is a prefill convenience only; never auto-start, and always
+  // strip it from the address bar immediately after reading it.
+  applyFragment();
+  setState({ phase: "idle" });
+  window.addEventListener("hashchange", applyFragment);
+}
+
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", main);
 } else {

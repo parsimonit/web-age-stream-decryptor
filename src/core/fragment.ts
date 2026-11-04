@@ -1,56 +1,36 @@
-import type { DecryptRequest, FragmentParams } from "./types.ts";
+import type { FragmentParams } from "./types.ts";
 
 /**
- * Parses a URL fragment hash into fragment parameters.
+ * Builds `u=<file-url>&pw=<passphrase>[&d=1]` without the leading `#`.
  *
- * Expected format: #u=<encoded-file-url>&pw=<encoded-passphrase>[&d=1]
- *
- * - `u` and `pw` are optional for prefill flows.
- * - `d=1` enables force-download mode.
- * - Any other `d` value (or missing `d`) leaves force-download disabled.
+ * Both values are encoded verbatim: the passphrase and URL are not trimmed or
+ * otherwise altered, so a link round-trips through `parseFragment`.
  */
-export function parseFragmentParams(hash: string): FragmentParams {
-  // Strip leading '#' if present
-  const cleanHash = hash.startsWith("#") ? hash.slice(1) : hash;
-
-  // Parse as URLSearchParams
-  const params = new URLSearchParams(cleanHash);
-
-  const fileUrl = params.get("u")?.trim() || undefined;
-  const passphrase = params.get("pw")?.trim() || undefined;
-  const forceDownload = params.get("d") === "1";
-
-  const result: FragmentParams = { forceDownload };
-
-  if (fileUrl) {
-    result.fileUrl = fileUrl;
-  }
-  if (passphrase) {
-    result.passphrase = passphrase;
-  }
-
-  return result;
+export function buildFragment(req: {
+  fileUrl: string;
+  passphrase: string;
+  saveOnly: boolean;
+}): string {
+  const params = new URLSearchParams();
+  params.set("u", req.fileUrl);
+  params.set("pw", req.passphrase);
+  if (req.saveOnly) params.set("d", "1");
+  return params.toString();
 }
 
 /**
- * Parses a URL fragment into partial params (for prefill and auto-decrypt checks).
+ * Parses `#u=<file-url>&pw=<passphrase>[&d=1]`.
+ *
+ * The passphrase is kept verbatim (it may legitimately start or end with
+ * spaces); only the URL is trimmed. Missing keys stay undefined.
  */
 export function parseFragment(hash: string): FragmentParams {
-  return parseFragmentParams(hash);
-}
+  const params = new URLSearchParams(hash.startsWith("#") ? hash.slice(1) : hash);
+  const fileUrl = params.get("u")?.trim();
+  const passphrase = params.get("pw");
 
-/**
- * Builds a complete DecryptRequest from parsed fragment params.
- * Returns null when required values are missing.
- */
-export function toDecryptRequest(params: FragmentParams): DecryptRequest | null {
-  if (!params.fileUrl || !params.passphrase) {
-    return null;
-  }
-
-  return {
-    fileUrl: params.fileUrl,
-    passphrase: params.passphrase,
-    forceDownload: params.forceDownload,
-  };
+  const result: FragmentParams = { saveOnly: params.get("d") === "1" };
+  if (fileUrl) result.fileUrl = fileUrl;
+  if (passphrase !== null) result.passphrase = passphrase;
+  return result;
 }

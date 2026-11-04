@@ -19,8 +19,10 @@ A client-side, static web app that decrypts Age-encrypted files in the browser. 
 - `npm run lint` — ESLint
 - `npm test` — Vitest
 - `npm run build` — production build
+- `npm run e2e` — browser E2E release gate (local headless Chrome via agent-browser)
+- `npm run verify` — `npm run gate && npm run e2e`
 
-Run lint, test, and build before considering a change complete.
+Run lint, test, build, and e2e before considering a change complete.
 
 ## Conventions
 

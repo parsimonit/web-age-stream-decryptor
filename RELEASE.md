@@ -9,11 +9,13 @@ Use this format:
 type(scope): short summary
 
 Examples:
+
 - feat(ui): add copy link feedback
 - fix(fragment): handle empty pw in hash
 - docs: update release notes
 
 Supported types:
+
 - feat: new user-facing functionality (minor bump)
 - fix: bug fix (patch bump)
 - perf: performance improvement (patch bump)
@@ -23,6 +25,7 @@ Supported types:
 - chore: tooling or housekeeping
 
 Breaking changes:
+
 - Add ! after type or scope, for example feat!: remove old fragment format
 - Or include BREAKING CHANGE: in the commit body
 - Any breaking change means a major bump
@@ -37,9 +40,9 @@ Breaking changes:
 
 1. Ensure main is green in CI.
 2. Run local checks:
-   - npm run lint
-   - npm test
-   - npm run build
+   - `npm run verify` runs `npm run gate && npm run e2e` (or `devbox run -- npm run verify` inside devbox)
+   - `npm run gate` runs `check:node`, `lint`, `typecheck`, `format:check`, `test:cov`, `build`, `audit:prod`
+   - `npm run e2e` is the browser release gate; it is local for now (CI-equivalent via `npm run e2e`) and its first run needs `npx agent-browser install` if Chrome is missing
 3. Pick next version based on commits since last tag.
 4. Update package.json version.
 5. Add a short changelog section to the GitHub Release notes.

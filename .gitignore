@@ -50,3 +50,6 @@ coverage/
 
 # Catchall
 nogit/
+
+# Deepwork state
+.slim/deepwork/
